@@ -1,0 +1,23 @@
+# Workspace file for portagenty. See:
+# https://cybersader.github.io/portagenty/reference/schema/
+name = "portaconv"
+id = "76452e59-6066-4628-a6e3-b69cbf45da20"
+multiplexer = "zellij"
+
+[[session]]
+name = "shell"
+cwd = "."
+command = "bash"
+kind = "shell"
+
+[[session]]
+name = "claude"
+cwd = "."
+command = "claude"
+kind = "claude-code"
+
+[[session]]
+name = "tests"
+cwd = "."
+command = "cargo watch -x test"
+kind = "dev-server"
