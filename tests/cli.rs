@@ -41,10 +41,7 @@ fn list_shows_only_main_session() {
     assert_eq!(s["tool"], "claude-code");
     assert_eq!(s["message_count"], 4);
     assert_eq!(s["cwd"], "/test/workspace/sample");
-    assert_eq!(
-        s["title"],
-        "Hello world — please read README.md"
-    );
+    assert_eq!(s["title"], "Hello world — please read README.md");
 }
 
 #[test]
@@ -65,7 +62,12 @@ fn dump_json_yields_normalized_conversation() {
     let out = Command::cargo_bin("pconv")
         .unwrap()
         .env("PORTACONV_CLAUDE_ROOT", fixture_root())
-        .args(["dump", "aaaaaaaa-bbbb-cccc-dddd-000000000001", "--format", "json"])
+        .args([
+            "dump",
+            "aaaaaaaa-bbbb-cccc-dddd-000000000001",
+            "--format",
+            "json",
+        ])
         .assert()
         .success()
         .get_output()

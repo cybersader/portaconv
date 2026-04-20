@@ -103,9 +103,7 @@ fn walk(dir: &Path, acc: &mut Vec<PathBuf>) -> Result<()> {
 
 fn is_subagent_file(p: &Path) -> bool {
     // New shape: any ancestor dir named `subagents`.
-    let in_subagents_dir = p
-        .components()
-        .any(|c| c.as_os_str() == "subagents");
+    let in_subagents_dir = p.components().any(|c| c.as_os_str() == "subagents");
     if in_subagents_dir {
         return true;
     }
@@ -142,8 +140,7 @@ fn scope_matches(meta: &SessionMeta, scope: &WorkspaceScope) -> bool {
 /// First pass: cheap scan for SessionMeta. Does not parse content
 /// bodies — only touches a few fields per line.
 fn scan_file(path: &Path) -> Result<Vec<SessionMeta>> {
-    let f =
-        File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let f = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let rdr = BufReader::new(f);
 
     // One entry per distinct sessionId seen in the file.
@@ -261,8 +258,7 @@ fn file_contains_session(path: &Path, id: &str) -> Result<bool> {
 
 /// Second pass: full parse, filtered to the requested sessionId.
 fn parse_session(path: &Path, session_id: &str) -> Result<Conversation> {
-    let f =
-        File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let f = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let rdr = BufReader::new(f);
 
     let mut messages: Vec<Message> = Vec::new();
@@ -292,7 +288,9 @@ fn parse_session(path: &Path, session_id: &str) -> Result<Conversation> {
 
         let ty = v.get("type").and_then(|s| s.as_str()).unwrap_or("");
         let ts = v.get("timestamp").and_then(|s| s.as_str()).and_then(|s| {
-            DateTime::parse_from_rfc3339(s).ok().map(|t| t.with_timezone(&Utc))
+            DateTime::parse_from_rfc3339(s)
+                .ok()
+                .map(|t| t.with_timezone(&Utc))
         });
         if started_at.is_none() {
             started_at = ts;
@@ -300,7 +298,11 @@ fn parse_session(path: &Path, session_id: &str) -> Result<Conversation> {
 
         match ty {
             "user" | "assistant" => {
-                let role = if ty == "user" { Role::User } else { Role::Assistant };
+                let role = if ty == "user" {
+                    Role::User
+                } else {
+                    Role::Assistant
+                };
                 let content = decode_content(&v);
                 if role == Role::User && title.is_none() {
                     title = extract_title(&v);
@@ -336,10 +338,7 @@ fn parse_session(path: &Path, session_id: &str) -> Result<Conversation> {
         ext.insert("system_events".into(), Value::Array(system_events));
     }
     if !unknown_records.is_empty() {
-        ext.insert(
-            "unknown_records".into(),
-            Value::Array(unknown_records),
-        );
+        ext.insert("unknown_records".into(), Value::Array(unknown_records));
     }
     let extensions = if ext.is_empty() {
         Value::Null
@@ -413,7 +412,9 @@ fn decode_block(b: &Value) -> ContentBlock {
             text: b.get("text").and_then(|t| t.as_str()).unwrap_or("").into(),
         },
         "thinking" => ContentBlock::Thinking {
-            text: b.get("thinking").and_then(|t| t.as_str())
+            text: b
+                .get("thinking")
+                .and_then(|t| t.as_str())
                 .or_else(|| b.get("text").and_then(|t| t.as_str()))
                 .unwrap_or("")
                 .into(),
@@ -438,10 +439,7 @@ fn decode_block(b: &Value) -> ContentBlock {
                     .join("\n"),
                 _ => String::new(),
             },
-            is_error: b
-                .get("is_error")
-                .and_then(|x| x.as_bool())
-                .unwrap_or(false),
+            is_error: b.get("is_error").and_then(|x| x.as_bool()).unwrap_or(false),
         },
         _ => ContentBlock::Unknown { raw: b.clone() },
     }

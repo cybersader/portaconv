@@ -166,7 +166,9 @@ fn walk_content(content: Option<&Value>, s: &mut Stats) {
             }
         }
         _ => {
-            *s.by_block.entry("<non-string-non-array>".into()).or_default() += 1;
+            *s.by_block
+                .entry("<non-string-non-array>".into())
+                .or_default() += 1;
         }
     }
 }

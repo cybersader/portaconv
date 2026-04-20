@@ -12,7 +12,11 @@ use clap::{Parser, Subcommand, ValueEnum};
 use crate::adapters::{ClaudeCode, ConvoAdapter, WorkspaceScope};
 
 #[derive(Parser, Debug)]
-#[command(name = "pconv", version, about = "Terminal-native conversation extractor for agent CLIs")]
+#[command(
+    name = "pconv",
+    version,
+    about = "Terminal-native conversation extractor for agent CLIs"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -72,7 +76,9 @@ pub fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::List(args) => run_list(args),
         Command::Dump(args) => run_dump(args),
-        Command::Mcp { sub: McpCommand::Serve } => Err(anyhow!(
+        Command::Mcp {
+            sub: McpCommand::Serve,
+        } => Err(anyhow!(
             "pconv mcp serve is not implemented yet — tracked for a follow-up commit"
         )),
     }
@@ -101,8 +107,8 @@ fn run_list(args: ListArgs) -> Result<()> {
         ListFormat::Table => {
             writeln!(
                 out,
-                "{:<36}  {:>5}  {:<20}  {}",
-                "session-id", "msgs", "updated", "title"
+                "{:<36}  {:>5}  {:<20}  title",
+                "session-id", "msgs", "updated"
             )?;
             writeln!(out, "{}", "-".repeat(100))?;
             for s in &sessions {
@@ -110,10 +116,7 @@ fn run_list(args: ListArgs) -> Result<()> {
                     .updated_at
                     .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
                     .unwrap_or_else(|| "-".into());
-                let title = s
-                    .title
-                    .as_deref()
-                    .unwrap_or("(untitled)");
+                let title = s.title.as_deref().unwrap_or("(untitled)");
                 let truncated: String = title.chars().take(60).collect();
                 writeln!(
                     out,

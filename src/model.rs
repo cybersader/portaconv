@@ -124,9 +124,8 @@ mod tests {
     #[test]
     fn unknown_block_preserves_raw() {
         let raw = serde_json::json!({"type": "image", "source": "…"});
-        let block: ContentBlock = serde_json::from_value(raw.clone()).unwrap_or(
-            ContentBlock::Unknown { raw: raw.clone() },
-        );
+        let block: ContentBlock = serde_json::from_value(raw.clone())
+            .unwrap_or(ContentBlock::Unknown { raw: raw.clone() });
         if let ContentBlock::Unknown { raw: r } = block {
             assert_eq!(r, raw);
         }
