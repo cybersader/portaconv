@@ -16,25 +16,166 @@ hero:
 
 import { Card, CardGrid, Aside } from "@astrojs/starlight/components";
 
-## Why
+## The problem — sync can't fix content
 
-Agent CLIs each keep conversation history in their own format, keyed
-to the absolute path of the directory the tool was launched from. Run
-Claude Code from WSL, then from Windows, and you get two
-`~/.claude/projects/` buckets for the same project — with **content**
-that carries OS-specific absolute paths baked into `cwd`, `file_path`
-tool args, and prose. File-level sync can merge storage but cannot
-fix content-layer divergence.
+<div style="display: flex; flex-direction: column; gap: 1.25rem; margin: 1.5rem 0;">
+  {/* Two buckets, same project */}
+  <div style="border: 2px solid var(--sl-color-red); border-radius: 12px; padding: 1rem 1.25rem; background: var(--sl-color-red-low);">
+    <div style="font-weight: 700; margin-bottom: 0.75rem; color: var(--sl-color-red-high);">One project · two buckets</div>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; font-size: 0.85rem;">
+      <div style="background: var(--sl-color-gray-6); border-radius: 8px; padding: 0.75rem;">
+        <div style="font-family: var(--sl-font-mono); opacity: 0.75; font-size: 0.75rem;">launched from WSL</div>
+        <div style="font-weight: 600; margin: 0.3rem 0;"><code>~/.claude/projects/</code></div>
+        <div style="font-family: var(--sl-font-mono); font-size: 0.75rem; word-break: break-all;">-mnt-c-Users-…-proj/</div>
+      </div>
+      <div style="background: var(--sl-color-gray-6); border-radius: 8px; padding: 0.75rem;">
+        <div style="font-family: var(--sl-font-mono); opacity: 0.75; font-size: 0.75rem;">launched from Windows</div>
+        <div style="font-weight: 600; margin: 0.3rem 0;"><code>~/.claude/projects/</code></div>
+        <div style="font-family: var(--sl-font-mono); font-size: 0.75rem; word-break: break-all;">C--Users-…-proj/</div>
+      </div>
+    </div>
+    <div style="margin-top: 0.75rem; font-size: 0.85rem; opacity: 0.8;">
+      Claude Code keys conversation storage by the absolute path of the CWD at launch. WSL and Windows encode the same project two different ways. <code>/resume</code> from one side doesn't see the other.
+    </div>
+  </div>
 
-**portaconv** pivots away from sync and into **extract**. Pick a
-conversation, render it to paste-ready markdown, and drop it into
-any fresh agent session — Claude Code, opencode, claude.ai web, or
-the API. Optionally rewrite paths on the way out.
+  <div style="text-align: center; font-size: 1rem; opacity: 0.6;">
+    file-level sync seems like the answer — it isn't
+  </div>
 
-<Aside type="note">
-Not a viewer. Not a daemon. Not a sync tool. A Unix-pipe-friendly
-extractor. If you want a GUI, [claude-code-history-viewer](https://github.com/jhlee0409/claude-code-history-viewer)
-covers that niche well.
+  {/* Content-layer path poisoning */}
+  <div style="border: 2px solid var(--sl-color-red); border-radius: 12px; padding: 1rem 1.25rem; background: var(--sl-color-red-low);">
+    <div style="font-weight: 700; margin-bottom: 0.5rem; color: var(--sl-color-red-high);">Inside the JSONL · content is path-poisoned</div>
+    <div style="font-family: var(--sl-font-mono); font-size: 0.8rem; background: var(--sl-color-gray-6); border-radius: 6px; padding: 0.75rem; margin-bottom: 0.5rem; overflow-x: auto;">
+      <div style="opacity: 0.7;">Windows-encoded bucket, one 54 MB session:</div>
+      <div style="margin-top: 0.4rem;">
+        <span style="color: var(--sl-color-red-high);">9999+</span>&nbsp;&nbsp;occurrences of&nbsp;<code>/mnt/c/…</code>&nbsp;&nbsp;← WSL paths<br/>
+        <span style="color: var(--sl-color-red-high);">72</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;occurrences of&nbsp;<code>C:\…</code>&nbsp;&nbsp;← Windows paths
+      </div>
+      <div style="margin-top: 0.4rem; opacity: 0.7;">(2026-04-19 spot-check; see the design notes for the full write-up)</div>
+    </div>
+    <div style="font-size: 0.85rem; opacity: 0.8;">
+      Symlinks, Docker bind mounts, polling sync — all merge <em>storage</em> and leave the content alone. A Windows-launched Claude Code resuming a WSL-authored session fails the first time it tries to Read <code>/mnt/c/…</code>.
+    </div>
+  </div>
+
+  <div style="text-align: center; font-size: 1rem; opacity: 0.6;">
+    portaconv flips the approach
+  </div>
+
+  {/* Extract, paste */}
+  <div style="border: 2px solid var(--sl-color-green); border-radius: 12px; padding: 1rem 1.25rem; background: var(--sl-color-green-low);">
+    <div style="font-weight: 700; margin-bottom: 0.5rem; color: var(--sl-color-green-high);">Extract · rewrite · paste</div>
+    <div style="font-size: 0.9rem; opacity: 0.85;">
+      Don't fight the on-disk split. Read the substantive dialogue out, normalize it, optionally rewrite paths on the way out, and let the human (or another agent) paste it into a fresh session anywhere. A fresh session has no embedded paths — no OS-specific failure mode. On-demand reads. No daemon. No race windows. Composes with pipes.
+    </div>
+  </div>
+</div>
+
+## Pipeline — JSONL to paste-ready
+
+<div style="display: flex; flex-direction: column; gap: 0; margin: 1.75rem 0; align-items: center;">
+  {/* row: on-disk */}
+  <div style="display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 0.25rem; align-items: stretch; width: 100%;">
+    <div style="background: var(--sl-color-gray-6); border: 2px solid var(--sl-color-gray-4); border-radius: 10px; padding: 0.75rem; text-align: center;">
+      <div style="font-weight: 700; font-size: 0.9rem;">JSONL on disk</div>
+      <div style="font-size: 0.75rem; font-family: var(--sl-font-mono); margin-top: 0.3rem;">~/.claude/projects/</div>
+      <div style="font-size: 0.7rem; opacity: 0.7; margin-top: 0.3rem;">event stream, tool-specific shape</div>
+    </div>
+    <div style="display: flex; align-items: center; font-size: 1.2rem; opacity: 0.6; padding: 0 0.25rem;">→</div>
+    <div style="background: var(--sl-color-blue-low); border: 2px solid var(--sl-color-blue); border-radius: 10px; padding: 0.75rem; text-align: center;">
+      <div style="font-weight: 700; font-size: 0.9rem;">Adapter</div>
+      <div style="font-size: 0.75rem; font-family: var(--sl-font-mono); margin-top: 0.3rem;">ConvoAdapter</div>
+      <div style="font-size: 0.7rem; opacity: 0.7; margin-top: 0.3rem;">record-type classification, subagent filter, session split</div>
+    </div>
+    <div style="display: flex; align-items: center; font-size: 1.2rem; opacity: 0.6; padding: 0 0.25rem;">→</div>
+    <div style="background: var(--sl-color-accent-low); border: 2px solid var(--sl-color-accent); border-radius: 10px; padding: 0.75rem; text-align: center;">
+      <div style="font-weight: 700; font-size: 0.9rem;">Shared model</div>
+      <div style="font-size: 0.75rem; font-family: var(--sl-font-mono); margin-top: 0.3rem;">Conversation</div>
+      <div style="font-size: 0.7rem; opacity: 0.7; margin-top: 0.3rem;">OpenAI-shape outside,<br/>Anthropic blocks inside</div>
+    </div>
+  </div>
+
+  <div style="width: 2px; height: 1.25rem; background: var(--sl-color-gray-4); margin: 0.25rem 0;"></div>
+
+  {/* row: transforms */}
+  <div style="background: var(--sl-color-orange-low); border: 2px solid var(--sl-color-orange); border-radius: 10px; padding: 0.6rem 1rem; text-align: center; max-width: 28rem;">
+    <div style="font-weight: 700; font-size: 0.9rem;">Transforms (opt-in)</div>
+    <div style="font-size: 0.75rem; opacity: 0.8; margin-top: 0.3rem;">
+      <code>--rewrite wsl-to-win</code> · <code>win-to-wsl</code> · <code>strip</code><br/>
+      apply to text + tool-call args — not <code>cwd</code> metadata
+    </div>
+  </div>
+
+  <div style="width: 2px; height: 1.25rem; background: var(--sl-color-gray-4); margin: 0.25rem 0;"></div>
+
+  {/* row: renderer + output */}
+  <div style="display: grid; grid-template-columns: 1fr auto 1fr; gap: 0.5rem; align-items: stretch; width: 100%; max-width: 36rem;">
+    <div style="background: var(--sl-color-purple-low); border: 2px solid var(--sl-color-purple); border-radius: 10px; padding: 0.75rem; text-align: center;">
+      <div style="font-weight: 700; font-size: 0.9rem;">Renderer</div>
+      <div style="font-size: 0.75rem; font-family: var(--sl-font-mono); margin-top: 0.3rem;">markdown | json</div>
+      <div style="font-size: 0.7rem; opacity: 0.7; margin-top: 0.3rem;">tool results truncated by default · thinking hidden by default</div>
+    </div>
+    <div style="display: flex; align-items: center; font-size: 1.2rem; opacity: 0.6; padding: 0 0.25rem;">→</div>
+    <div style="background: var(--sl-color-green-low); border: 2px solid var(--sl-color-green); border-radius: 10px; padding: 0.75rem; text-align: center;">
+      <div style="font-weight: 700; font-size: 0.9rem;">stdout</div>
+      <div style="font-size: 0.75rem; font-family: var(--sl-font-mono); margin-top: 0.3rem;">paste-ready</div>
+      <div style="font-size: 0.7rem; opacity: 0.7; margin-top: 0.3rem;">pipe, clipboard, commit to docs/</div>
+    </div>
+  </div>
+</div>
+
+## Path rewriting, by example
+
+<div style="display: flex; flex-direction: column; gap: 0.75rem; margin: 1.5rem 0;">
+  <div style="display: grid; grid-template-columns: 1fr auto 1fr; gap: 0.5rem; align-items: stretch;">
+    <div style="background: var(--sl-color-gray-6); border-radius: 8px; padding: 0.75rem; font-family: var(--sl-font-mono); font-size: 0.8rem;">
+      <div style="opacity: 0.7; margin-bottom: 0.3rem; font-family: var(--sl-font-sans);">WSL-authored message</div>
+      <div>please read /mnt/c/work/src/main.rs</div>
+    </div>
+    <div style="display: flex; align-items: center; flex-direction: column; gap: 0.15rem; padding: 0 0.4rem;">
+      <div style="font-size: 0.7rem; opacity: 0.6; font-family: var(--sl-font-mono); white-space: nowrap;">--rewrite wsl-to-win</div>
+      <div style="font-size: 1.1rem; opacity: 0.6;">→</div>
+    </div>
+    <div style="background: var(--sl-color-green-low); border: 1px solid var(--sl-color-green); border-radius: 8px; padding: 0.75rem; font-family: var(--sl-font-mono); font-size: 0.8rem;">
+      <div style="opacity: 0.7; margin-bottom: 0.3rem; font-family: var(--sl-font-sans);">paste-ready for Windows</div>
+      <div>please read C:\work\src\main.rs</div>
+    </div>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1fr auto 1fr; gap: 0.5rem; align-items: stretch;">
+    <div style="background: var(--sl-color-gray-6); border-radius: 8px; padding: 0.75rem; font-family: var(--sl-font-mono); font-size: 0.8rem;">
+      <div style="opacity: 0.7; margin-bottom: 0.3rem; font-family: var(--sl-font-sans);">Windows-authored tool call</div>
+      <div>{`{"file_path": "C:\\\\work\\\\src\\\\main.rs"}`}</div>
+    </div>
+    <div style="display: flex; align-items: center; flex-direction: column; gap: 0.15rem; padding: 0 0.4rem;">
+      <div style="font-size: 0.7rem; opacity: 0.6; font-family: var(--sl-font-mono); white-space: nowrap;">--rewrite win-to-wsl</div>
+      <div style="font-size: 1.1rem; opacity: 0.6;">→</div>
+    </div>
+    <div style="background: var(--sl-color-green-low); border: 1px solid var(--sl-color-green); border-radius: 8px; padding: 0.75rem; font-family: var(--sl-font-mono); font-size: 0.8rem;">
+      <div style="opacity: 0.7; margin-bottom: 0.3rem; font-family: var(--sl-font-sans);">paste-ready for WSL</div>
+      <div>{`{"file_path": "/mnt/c/work/src/main.rs"}`}</div>
+    </div>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1fr auto 1fr; gap: 0.5rem; align-items: stretch;">
+    <div style="background: var(--sl-color-gray-6); border-radius: 8px; padding: 0.75rem; font-family: var(--sl-font-mono); font-size: 0.8rem;">
+      <div style="opacity: 0.7; margin-bottom: 0.3rem; font-family: var(--sl-font-sans);">mixed paths</div>
+      <div>saw /mnt/d/data.csv next to C:\Reports\q1.xlsx</div>
+    </div>
+    <div style="display: flex; align-items: center; flex-direction: column; gap: 0.15rem; padding: 0 0.4rem;">
+      <div style="font-size: 0.7rem; opacity: 0.6; font-family: var(--sl-font-mono); white-space: nowrap;">--rewrite strip</div>
+      <div style="font-size: 1.1rem; opacity: 0.6;">→</div>
+    </div>
+    <div style="background: var(--sl-color-green-low); border: 1px solid var(--sl-color-green); border-radius: 8px; padding: 0.75rem; font-family: var(--sl-font-mono); font-size: 0.8rem;">
+      <div style="opacity: 0.7; margin-bottom: 0.3rem; font-family: var(--sl-font-sans);">paste-ready for web / API</div>
+      <div>saw &lt;path&gt; next to &lt;path&gt;</div>
+    </div>
+  </div>
+</div>
+
+<Aside type="note" title="What paths are NOT rewritten">
+`Conversation.cwd` and per-message `extensions` are metadata about the authoring environment — they describe the session, not its content. They're preserved verbatim so you can still see where the session ran. Only text blocks + tool-call args + tool-result bodies are rewritten.
 </Aside>
 
 ## Commands (v0.1)
@@ -42,17 +183,40 @@ covers that niche well.
 <CardGrid>
   <Card title="pconv list" icon="list-format">
     List conversations from any detected agent CLI. Filter by
-    workspace, time, or tool.
+    workspace, time, or tool. Table or JSON output.
   </Card>
   <Card title="pconv dump" icon="document">
-    Dump one session to stdout as paste-ready markdown.
-    Opt-in `--rewrite wsl-to-win` / `win-to-wsl` / `strip` transforms.
+    Dump one session to stdout. Default output is paste-ready
+    markdown with tool calls and truncated results. Opt-in flags:
+    `--rewrite`, `--include-thinking`, `--full-results`.
   </Card>
   <Card title="pconv mcp serve" icon="seti:config">
-    Stdio MCP server. `list_conversations` + `get_conversation`
-    tools; each conversation exposed as `convos://conversation/&lt;id&gt;`.
+    Stdio MCP server (coming soon). `list_conversations` +
+    `get_conversation` tools; each conversation exposed as
+    `convos://conversation/&lt;id&gt;`.
   </Card>
 </CardGrid>
+
+## Design principles
+
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem; margin: 1.5rem 0;">
+  <div style="border: 1px solid var(--sl-color-gray-4); border-radius: 10px; padding: 0.75rem 1rem; background: var(--sl-color-gray-6);">
+    <div style="font-weight: 700; margin-bottom: 0.3rem;">Read-only</div>
+    <div style="font-size: 0.8rem; opacity: 0.8;">Never writes to any tool's storage. On-demand reads. No daemon, no file watching.</div>
+  </div>
+  <div style="border: 1px solid var(--sl-color-gray-4); border-radius: 10px; padding: 0.75rem 1rem; background: var(--sl-color-gray-6);">
+    <div style="font-weight: 700; margin-bottom: 0.3rem;">Resilient</div>
+    <div style="font-size: 0.8rem; opacity: 0.8;">Unknown record types preserved in <code>extensions.unknown_records</code>. Adapter version drift doesn't crash the load.</div>
+  </div>
+  <div style="border: 1px solid var(--sl-color-gray-4); border-radius: 10px; padding: 0.75rem 1rem; background: var(--sl-color-gray-6);">
+    <div style="font-weight: 700; margin-bottom: 0.3rem;">Composable</div>
+    <div style="font-size: 0.8rem; opacity: 0.8;">Unix-pipe-friendly stdout. JSON for machine processing. Markdown for humans. No built-in clipboard — pipe to <code>clip.exe</code> / <code>pbcopy</code> yourself.</div>
+  </div>
+  <div style="border: 1px solid var(--sl-color-gray-4); border-radius: 10px; padding: 0.75rem 1rem; background: var(--sl-color-gray-6);">
+    <div style="font-weight: 700; margin-bottom: 0.3rem;">Future-accounting</div>
+    <div style="font-size: 0.8rem; opacity: 0.8;">OpenAI-shape core + extensions bag means new tools slot in without a schema migration.</div>
+  </div>
+</div>
 
 ## How it composes
 
@@ -62,13 +226,15 @@ independently:
 
 - **Standalone**: `cargo install portaconv`, run `pconv` from any
   terminal. Reads `~/.claude/projects/` directly.
-- **With portagenty**: future `pa convos` shim passes workspace
+- **With portagenty** _(planned)_: a `pa convos` shim passes workspace
   context to `pconv` so list/dump automatically scope to the
   current workspace's projects.
 
 ## Status
 
-**v0.0.1 bootstrap.** Research spike complete — see the
+**v0.0.1 bootstrap, Phase 2 complete.**
+Core model, Claude Code adapter, markdown renderer, and
+path-rewrite transforms all landed. MCP server and list-performance
+optimization queued for follow-up. See the
 [Claude Code adapter notes](/portaconv/reference/adapter-claude-code/)
-for the v0.1 contract. Commands not yet implemented; see the
-repo for progress.
+for the v0.1 record-type contract.

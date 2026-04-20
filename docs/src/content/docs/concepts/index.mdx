@@ -1,0 +1,166 @@
+---
+title: Concepts
+description: How portaconv thinks about conversation history.
+sidebar:
+  order: 1
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+portaconv sits between a handful of non-obvious ideas. Skim these
+before the reference.
+
+## The three layers
+
+<div style="display: flex; flex-direction: column; gap: 0.5rem; margin: 1.5rem 0;">
+  <div style="display: grid; grid-template-columns: 8rem 1fr; gap: 0.75rem; align-items: stretch;">
+    <div style="background: var(--sl-color-blue-low); border: 2px solid var(--sl-color-blue); border-radius: 10px; padding: 0.5rem 0.75rem; display: flex; flex-direction: column; justify-content: center; text-align: center;">
+      <div style="font-weight: 700; font-size: 0.9rem;">Adapter</div>
+      <div style="font-size: 0.7rem; font-family: var(--sl-font-mono); opacity: 0.7;">tool-specific</div>
+    </div>
+    <div style="padding: 0.4rem 0;">
+      <div style="font-weight: 600; font-size: 0.9rem;">Read and normalize one tool's on-disk shape</div>
+      <div style="font-size: 0.85rem; opacity: 0.8; margin-top: 0.2rem;">v0.1 ships the Claude Code adapter. The trait is small — <code>detect</code>, <code>list</code>, <code>load(id)</code> — so future adapters (opencode, Cursor, Aider, continue.dev) can land one-at-a-time without reshaping the core.</div>
+    </div>
+  </div>
+  <div style="display: grid; grid-template-columns: 8rem 1fr; gap: 0.75rem; align-items: stretch;">
+    <div style="background: var(--sl-color-accent-low); border: 2px solid var(--sl-color-accent); border-radius: 10px; padding: 0.5rem 0.75rem; display: flex; flex-direction: column; justify-content: center; text-align: center;">
+      <div style="font-weight: 700; font-size: 0.9rem;">Shared model</div>
+      <div style="font-size: 0.7rem; font-family: var(--sl-font-mono); opacity: 0.7;">tool-agnostic</div>
+    </div>
+    <div style="padding: 0.4rem 0;">
+      <div style="font-weight: 600; font-size: 0.9rem;">One <code>Conversation</code> type, shape-compatible with OpenAI Chat Completions</div>
+      <div style="font-size: 0.85rem; opacity: 0.8; margin-top: 0.2rem;">Anthropic content-blocks preserved inside (<code>text</code> / <code>tool_use</code> / <code>tool_result</code> / <code>thinking</code>). Extensions bags at both conversation and message level carry tool-specific bits without polluting the core types.</div>
+    </div>
+  </div>
+  <div style="display: grid; grid-template-columns: 8rem 1fr; gap: 0.75rem; align-items: stretch;">
+    <div style="background: var(--sl-color-purple-low); border: 2px solid var(--sl-color-purple); border-radius: 10px; padding: 0.5rem 0.75rem; display: flex; flex-direction: column; justify-content: center; text-align: center;">
+      <div style="font-weight: 700; font-size: 0.9rem;">Renderer + transforms</div>
+      <div style="font-size: 0.7rem; font-family: var(--sl-font-mono); opacity: 0.7;">output shape</div>
+    </div>
+    <div style="padding: 0.4rem 0;">
+      <div style="font-weight: 600; font-size: 0.9rem;">Format and optionally rewrite on the way out</div>
+      <div style="font-size: 0.85rem; opacity: 0.8; margin-top: 0.2rem;"><code>markdown</code> for humans and agents, <code>json</code> for machines. Path-rewrite transforms (<code>wsl-to-win</code>, <code>win-to-wsl</code>, <code>strip</code>) are opt-in and apply to content only — <code>cwd</code> metadata stays verbatim.</div>
+    </div>
+  </div>
+</div>
+
+## The `Conversation` shape
+
+<div style="background: var(--sl-color-gray-6); border-radius: 10px; padding: 1rem; margin: 1.5rem 0; font-family: var(--sl-font-mono); font-size: 0.85rem;">
+<pre style="margin: 0;"><code>{`Conversation {
+  id,                // session UUID
+  title?,            // derived from first user message
+  cwd?,              // launch-time working dir
+  started_at?,
+  messages: [
+    Message {
+      role,          // user | assistant | system | tool
+      content: [
+        Text { text } |
+        ToolUse { id, name, input } |
+        ToolResult { tool_use_id, output, is_error } |
+        Thinking { text } |
+        Unknown { raw }        ← resilience hook
+      ],
+      timestamp?,
+      extensions,    // adapter-specific per-message bits
+    }
+  ],
+  extensions,        // adapter-specific per-conversation bits
+                     //   - system_events (dropped from messages)
+                     //   - unknown_records (safety net)
+}`}</code></pre>
+</div>
+
+<Aside type="note" title="Why extensions bags">
+Every tool we'll ever adapt has fields the core schema doesn't promote (Claude Code has <code>gitBranch</code>, <code>permissionMode</code>, <code>thinkingMetadata</code>, <code>isCompactSummary</code>, …). Flattening them into the core pollutes the model; dropping them loses data. A <code>serde_json::Value</code> extensions bag at both levels is the third option — tool-specific bits survive the round trip without the core types having to know about them.
+</Aside>
+
+## What the adapter classifies
+
+The Claude Code adapter encounters six top-level record types in
+practice plus five more surfaced in production after the initial
+spike. Each falls into one of three buckets:
+
+<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem; margin: 1.5rem 0;">
+  <div style="border: 2px solid var(--sl-color-green); border-radius: 10px; padding: 0.75rem; background: var(--sl-color-green-low);">
+    <div style="font-weight: 700; color: var(--sl-color-green-high); margin-bottom: 0.4rem;">Schema</div>
+    <div style="font-size: 0.8rem; opacity: 0.85; margin-bottom: 0.4rem;">Normalized into <code>messages</code>.</div>
+    <div style="font-family: var(--sl-font-mono); font-size: 0.75rem;">
+      <code>user</code><br/>
+      <code>assistant</code>
+    </div>
+  </div>
+  <div style="border: 2px solid var(--sl-color-orange); border-radius: 10px; padding: 0.75rem; background: var(--sl-color-orange-low);">
+    <div style="font-weight: 700; color: var(--sl-color-orange-high); margin-bottom: 0.4rem;">Extensions</div>
+    <div style="font-size: 0.8rem; opacity: 0.85; margin-bottom: 0.4rem;">Preserved in <code>extensions</code>, not rendered.</div>
+    <div style="font-family: var(--sl-font-mono); font-size: 0.75rem;">
+      <code>system</code> → <code>system_events</code><br/>
+      <code>permission-mode</code><br/>
+      <code>attachment</code><br/>
+      <code>custom-title</code><br/>
+      <code>agent-name</code><br/>
+      <em>(unknowns)</em>
+    </div>
+  </div>
+  <div style="border: 2px solid var(--sl-color-gray-4); border-radius: 10px; padding: 0.75rem; background: var(--sl-color-gray-6);">
+    <div style="font-weight: 700; margin-bottom: 0.4rem;">Skipped</div>
+    <div style="font-size: 0.8rem; opacity: 0.85; margin-bottom: 0.4rem;">Dropped — not load-bearing for paste workflows.</div>
+    <div style="font-family: var(--sl-font-mono); font-size: 0.75rem;">
+      <code>file-history-snapshot</code><br/>
+      <code>progress</code><br/>
+      <code>queue-operation</code><br/>
+      <code>last-prompt</code>
+    </div>
+  </div>
+</div>
+
+The full per-record contract is in the
+[adapter notes](/portaconv/reference/adapter-claude-code/).
+
+## Subagent filter
+
+Subagent sessions are transient — they're called by a parent session's
+tool_use, do their work, and return a consolidated result. Listing
+them alongside top-level sessions in <code>pconv list</code> is noise
+for paste workflows, so the adapter filters them out. Two shapes exist:
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin: 1.5rem 0;">
+  <div style="border: 1px solid var(--sl-color-gray-4); border-radius: 10px; padding: 0.75rem; background: var(--sl-color-gray-6);">
+    <div style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.3rem;">old shape <span style="font-weight: 400; opacity: 0.6; font-family: var(--sl-font-mono); font-size: 0.75rem;">Claude ≤ 2.0.x</span></div>
+    <div style="font-family: var(--sl-font-mono); font-size: 0.75rem; opacity: 0.85;">
+      &lt;project-dir&gt;/<br/>
+      &nbsp;&nbsp;agent-&lt;hash&gt;.jsonl
+    </div>
+  </div>
+  <div style="border: 1px solid var(--sl-color-gray-4); border-radius: 10px; padding: 0.75rem; background: var(--sl-color-gray-6);">
+    <div style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.3rem;">new shape <span style="font-weight: 400; opacity: 0.6; font-family: var(--sl-font-mono); font-size: 0.75rem;">Claude ≥ 2.1.x</span></div>
+    <div style="font-family: var(--sl-font-mono); font-size: 0.75rem; opacity: 0.85;">
+      &lt;project-dir&gt;/<br/>
+      &nbsp;&nbsp;&lt;parent-uuid&gt;/<br/>
+      &nbsp;&nbsp;&nbsp;&nbsp;subagents/<br/>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;agent-*.jsonl
+    </div>
+  </div>
+</div>
+
+## Multi-session JSONLs
+
+A single on-disk JSONL can carry multiple sessionIds when Claude's
+<code>/compact</code> writes a continuation under a new session UUID
+but appends to the same file. portaconv surfaces each distinct
+sessionId as its own <code>SessionMeta</code>, matching Claude's
+own <code>/resume</code> mental model where the sessionId — not the
+file — is the identity.
+
+<Aside type="caution" title="Tool-call state doesn't survive paste">
+The renderer preserves the tool-call intent (name + args) and the result body, but the paste lands in a fresh agent process with no running tools and no live file state. Re-runs happen against the current filesystem. For most recovery scenarios this is fine — the substantive reasoning is what carries over.
+</Aside>
+
+## Read-only, on-demand
+
+portaconv never writes to any tool's storage. There is no daemon,
+no file watcher, no auto-sync. Every <code>pconv</code> invocation
+reads the current state of disk and emits output. Simpler to reason
+about, trivially reversible, composes with pipes.

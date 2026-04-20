@@ -5,10 +5,10 @@ sidebar:
   order: 1
 ---
 
-:::caution
-portaconv is at **v0.0.1 bootstrap**. Commands are not yet implemented.
-The install path below is the intended shape; until v0.1 ships, clone
-the repo and build from source.
+:::note
+**v0.0.1.** `list` and `dump` (including `--rewrite` path transforms)
+are implemented. `mcp serve` lands in a follow-up release. Install
+from source until the crate is published to crates.io.
 :::
 
 ## From crates.io (planned, v0.1+)
