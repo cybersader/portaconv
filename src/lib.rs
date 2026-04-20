@@ -7,11 +7,12 @@
 
 pub mod adapters;
 pub mod cli;
+pub mod mcp;
 pub mod model;
 pub mod render;
 pub mod transform;
 
-pub use adapters::{ClaudeCode, ConvoAdapter, SessionMeta, WorkspaceScope};
+pub use adapters::{dedup_sessions, ClaudeCode, ConvoAdapter, SessionMeta, WorkspaceScope};
 pub use model::{ContentBlock, Conversation, Message, Role};
 pub use render::{render_markdown, MarkdownOptions};
 pub use transform::{apply_path_rewrite, PathRewrite};

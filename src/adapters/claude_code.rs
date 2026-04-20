@@ -67,16 +67,36 @@ impl ConvoAdapter for ClaudeCode {
 
     fn load(&self, id: &str) -> Result<Conversation> {
         let root = projects_root().ok_or_else(|| anyhow!("no home dir"))?;
+        // A sessionId can appear in multiple physical files: its home file,
+        // WSL/Windows-encoded duplicates, and sibling files when /compact
+        // writes a continuation under a new sessionId but appends to the
+        // parent's file. Prefer the canonical home file (basename stem ==
+        // sessionId); tie-break by size (larger = fuller history).
+        let mut candidates: Vec<PathBuf> = Vec::new();
         for file in walk_jsonls(&root)? {
             if is_subagent_file(&file) {
                 continue;
             }
             if file_contains_session(&file, id)? {
-                return parse_session(&file, id);
+                candidates.push(file);
             }
         }
-        Err(anyhow!("session {id} not found under {}", root.display()))
+        if candidates.is_empty() {
+            return Err(anyhow!("session {id} not found under {}", root.display()));
+        }
+        candidates.sort_by_key(|p| pick_rank(p, id));
+        parse_session(&candidates[0], id)
     }
+}
+
+/// Lower rank = higher preference. Tuple ordering does the work:
+///   1. 0 if basename stem matches id, else 1 (home file wins)
+///   2. size in bytes, negated so larger wins on tie
+fn pick_rank(p: &Path, id: &str) -> (u8, i64) {
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let tier = if stem == id { 0 } else { 1 };
+    let size = std::fs::metadata(p).map(|m| m.len() as i64).unwrap_or(0);
+    (tier, -size)
 }
 
 fn walk_jsonls(root: &Path) -> Result<Vec<PathBuf>> {

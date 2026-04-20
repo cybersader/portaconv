@@ -50,3 +50,27 @@ pub trait ConvoAdapter: Send + Sync {
     fn list(&self, scope: Option<&WorkspaceScope>) -> Result<Vec<SessionMeta>>;
     fn load(&self, id: &str) -> Result<Conversation>;
 }
+
+/// Collapse duplicate `SessionMeta` entries with the same id, keeping the
+/// one with the highest `message_count` (tie-break: most recent
+/// `updated_at`). Same sessionId shows up multiple times when a project
+/// has been launched from both WSL and Windows — the two encoded-dir
+/// buckets each carry a copy. Callers that want the raw multi-entry
+/// view skip this step.
+pub fn dedup_sessions(mut metas: Vec<SessionMeta>) -> Vec<SessionMeta> {
+    use std::collections::HashMap;
+    let mut best: HashMap<String, SessionMeta> = HashMap::new();
+    for m in metas.drain(..) {
+        match best.get(&m.id) {
+            Some(existing)
+                if (existing.message_count, existing.updated_at)
+                    >= (m.message_count, m.updated_at) => {}
+            _ => {
+                best.insert(m.id.clone(), m);
+            }
+        }
+    }
+    let mut out: Vec<SessionMeta> = best.into_values().collect();
+    out.sort_by_key(|m| std::cmp::Reverse(m.updated_at));
+    out
+}
