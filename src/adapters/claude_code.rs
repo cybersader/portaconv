@@ -15,6 +15,7 @@ use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
+use super::cache::{self, ListCache};
 use super::{ConvoAdapter, SessionMeta, WorkspaceScope};
 use crate::model::{ContentBlock, Conversation, Message, Role};
 
@@ -24,6 +25,34 @@ fn projects_root() -> Option<PathBuf> {
         return Some(PathBuf::from(p));
     }
     dirs::home_dir().map(|h| h.join(".claude").join("projects"))
+}
+
+/// Flag + stats captured per list() call. The CLI (and MCP server,
+/// if it grows a debug mode) can read these back to expose cache
+/// behavior without the trait having to surface it.
+#[derive(Debug, Default, Clone)]
+pub struct ListRunStats {
+    pub cache_hits: usize,
+    pub cache_misses: usize,
+    pub cache_enabled: bool,
+    pub cache_path: Option<PathBuf>,
+}
+
+thread_local! {
+    // Tiny thread-local switch for the --no-cache flag. Avoids threading
+    // an option through the ConvoAdapter trait (which is tool-agnostic
+    // and shouldn't know about caching). Set via the helper below.
+    static NO_CACHE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static LAST_STATS: std::cell::RefCell<ListRunStats> =
+        std::cell::RefCell::new(ListRunStats::default());
+}
+
+pub fn set_no_cache(no: bool) {
+    NO_CACHE.with(|c| c.set(no));
+}
+
+pub fn take_last_stats() -> ListRunStats {
+    LAST_STATS.with(|c| std::mem::take(&mut *c.borrow_mut()))
 }
 
 pub struct ClaudeCode;
@@ -43,6 +72,15 @@ impl ConvoAdapter for ClaudeCode {
             return Ok(Vec::new());
         }
 
+        let use_cache = !NO_CACHE.with(|c| c.get());
+        let mut cache = if use_cache {
+            cache::load_or_empty()
+        } else {
+            ListCache::default()
+        };
+        let mut hits = 0usize;
+        let mut misses = 0usize;
+
         let mut out: Vec<SessionMeta> = Vec::new();
         for file in walk_jsonls(&root)? {
             if is_subagent_file(&file) {
@@ -52,7 +90,26 @@ impl ConvoAdapter for ClaudeCode {
             // sessionIds (/compact rewrites the continuation under a new
             // id but appends to the same file). list() surfaces every
             // distinct sessionId — matches Claude's /resume mental model.
-            for meta in scan_file(&file)?.into_iter() {
+            let metas = if use_cache {
+                match cache::lookup(&cache, &file) {
+                    Some(cached) => {
+                        hits += 1;
+                        cached
+                            .into_iter()
+                            .map(|c| c.into_session_meta(file.clone()))
+                            .collect()
+                    }
+                    None => {
+                        misses += 1;
+                        let fresh = scan_file(&file)?;
+                        cache::record(&mut cache, &file, &fresh);
+                        fresh
+                    }
+                }
+            } else {
+                scan_file(&file)?
+            };
+            for meta in metas.into_iter() {
                 if let Some(s) = scope {
                     if !scope_matches(&meta, s) {
                         continue;
@@ -61,6 +118,25 @@ impl ConvoAdapter for ClaudeCode {
                 out.push(meta);
             }
         }
+
+        if use_cache {
+            cache::prune_missing(&mut cache);
+            if let Err(e) = cache::save(&cache) {
+                // Cache write failure isn't fatal — fresh data already
+                // in `out`. Note and carry on.
+                eprintln!("pconv: warning: failed to write list cache: {e:#}");
+            }
+        }
+
+        LAST_STATS.with(|c| {
+            *c.borrow_mut() = ListRunStats {
+                cache_hits: hits,
+                cache_misses: misses,
+                cache_enabled: use_cache,
+                cache_path: if use_cache { cache::cache_path() } else { None },
+            };
+        });
+
         out.sort_by_key(|m| std::cmp::Reverse(m.updated_at));
         Ok(out)
     }

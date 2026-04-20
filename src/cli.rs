@@ -53,6 +53,15 @@ pub struct ListArgs {
     /// `auto` to walk up from cwd for the nearest `*.portagenty.toml`.
     #[arg(long)]
     pub workspace_toml: Option<String>,
+    /// Bypass the per-file list cache. Use for debugging or after
+    /// suspecting the cache is stale (it normally invalidates per-file
+    /// by mtime+size, but this is the manual override).
+    #[arg(long)]
+    pub no_cache: bool,
+    /// Print a trailing line with cache hit/miss counts and the
+    /// on-disk cache path. Useful for benchmarking.
+    #[arg(long)]
+    pub cache_stats: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -238,6 +247,7 @@ fn run_list(args: ListArgs) -> Result<()> {
             "Claude Code storage not found. Expected ~/.claude/projects/ (or set PORTACONV_CLAUDE_ROOT)"
         ));
     }
+    crate::adapters::claude_code::set_no_cache(args.no_cache);
     let scope = build_workspace_scope(args.workspace_toml.as_deref())?;
     let mut sessions = adapter
         .list(Some(&scope))
@@ -276,6 +286,21 @@ fn run_list(args: ListArgs) -> Result<()> {
             }
             writeln!(out, "\n{} session(s)", sessions.len())?;
         }
+    }
+    if args.cache_stats {
+        let stats = crate::adapters::claude_code::take_last_stats();
+        writeln!(
+            out,
+            "cache: enabled={}, hits={}, misses={}, path={}",
+            stats.cache_enabled,
+            stats.cache_hits,
+            stats.cache_misses,
+            stats
+                .cache_path
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "(unavailable)".into())
+        )?;
     }
     Ok(())
 }

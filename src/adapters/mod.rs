@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::Conversation;
 
+pub mod cache;
 pub mod claude_code;
 
 pub use claude_code::ClaudeCode;
