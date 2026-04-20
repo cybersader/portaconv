@@ -34,6 +34,7 @@ const CHECKS = [
   { path: `${PREFIX}/`, mustContain: "portaconv" },
   { path: `${PREFIX}/getting-started/installation/`, mustContain: "cargo install" },
   { path: `${PREFIX}/concepts/`, mustContain: "Adapter" },
+  { path: `${PREFIX}/concepts/agents-and-portagenty/`, mustContain: "MCP" },
   { path: `${PREFIX}/reference/commands/`, mustContain: "pconv dump" },
   { path: `${PREFIX}/reference/adapter-claude-code/`, mustContain: "Record type" },
   { path: `${PREFIX}/pagefind/pagefind.js`, mustContain: "" }, // 200 is enough

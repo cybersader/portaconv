@@ -1,0 +1,224 @@
+---
+title: Agents + portagenty
+description: How to wire portaconv into agent workflows — CLI calls, MCP server, and portagenty workspace scoping.
+sidebar:
+  order: 2
+---
+
+import { Aside, Tabs, TabItem } from "@astrojs/starlight/components";
+
+portaconv exists so agents (and humans) can **shovel context around** —
+recover from a `/compact`, hand a session off to a different tool,
+paste yesterday's reasoning into today's fresh agent, or commit
+meaningful context slices into a repo. Two integration surfaces
+cover this: the CLI (any agent that runs shell commands) and the
+MCP server (agents speaking Model Context Protocol).
+
+## Two ways an agent reaches portaconv
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin: 1.5rem 0;">
+  <div style="border: 2px solid var(--sl-color-blue); border-radius: 10px; padding: 0.9rem 1rem; background: var(--sl-color-blue-low);">
+    <div style="font-weight: 700; margin-bottom: 0.4rem;">CLI — any agent with Bash tool</div>
+    <div style="font-size: 0.85rem; opacity: 0.85; margin-bottom: 0.4rem;">
+      Agent runs <code>pconv list</code> / <code>pconv dump &lt;id&gt;</code> through its shell-execution tool. No extra wiring. Works in Claude Code, opencode, Aider, terminal-bound agents.
+    </div>
+    <div style="font-size: 0.75rem; font-family: var(--sl-font-mono); opacity: 0.7;">latency: fork+exec + walk · structured output: --format json</div>
+  </div>
+  <div style="border: 2px solid var(--sl-color-accent); border-radius: 10px; padding: 0.9rem 1rem; background: var(--sl-color-accent-low);">
+    <div style="font-weight: 700; margin-bottom: 0.4rem;">MCP — agents speaking the protocol</div>
+    <div style="font-size: 0.85rem; opacity: 0.85; margin-bottom: 0.4rem;">
+      Start <code>pconv mcp serve</code> from the agent's <code>mcp.json</code>. Two typed tools + a URI-templated resource. Agent calls them like any other MCP server.
+    </div>
+    <div style="font-size: 0.75rem; font-family: var(--sl-font-mono); opacity: 0.7;">latency: in-process JSON-RPC · structured output: schema-validated</div>
+  </div>
+</div>
+
+## CLI — agent-callable via Bash tool
+
+A Claude Code session or any shell-capable agent can just run the
+binary. The `--format json` flag on `list` and the default markdown
+output on `dump` keep the agent's downstream parsing simple.
+
+```sh
+# Discover sessions belonging to the current workspace
+pconv list --workspace-toml auto --format json
+
+# Dump a specific session for context recovery, with path rewriting
+pconv dump <session-id> --rewrite wsl-to-win
+
+# Pipe to a recovery doc and commit it
+pconv dump <session-id> > docs/agent-context/2026-04-20-recovery.md
+git add docs/agent-context/ && git commit -m "capture recovery context"
+```
+
+<Aside type="tip" title="Agent-ergonomics defaults">
+Exit codes are standard (`0` success, `1` any error, stderr carries
+the message). `--format json` on `list` gives the agent a clean
+structured list it can pipe into `jq` or re-parse. `dump`'s markdown
+default is tuned for re-pasting into an agent, not for human
+reading — short, hierarchical, tool-call-preserving.
+</Aside>
+
+## MCP — tools + resources over stdio
+
+`pconv mcp serve` speaks JSON-RPC 2.0 over stdio, line-delimited.
+Drop this into any MCP-capable agent's config:
+
+<Tabs>
+  <TabItem label="Claude Code">
+    Claude Code reads `~/.claude/mcp.json` (or a project-local
+    `.mcp.json`) at launch. Add:
+
+    ```json
+    {
+      "mcpServers": {
+        "portaconv": {
+          "command": "pconv",
+          "args": ["mcp", "serve"]
+        }
+      }
+    }
+    ```
+  </TabItem>
+  <TabItem label="opencode">
+    opencode uses a similar config shape. See its docs for the exact
+    path — the `command` + `args` pair is portable.
+  </TabItem>
+</Tabs>
+
+### Exposed tools
+
+<div style="background: var(--sl-color-gray-6); border-radius: 8px; padding: 1rem; margin: 1.5rem 0; font-family: var(--sl-font-mono); font-size: 0.82rem;">
+<pre style="margin: 0;"><code>{`list_conversations {
+  min_messages?:   integer      // default 1
+  show_duplicates?: boolean     // default false — collapse WSL/Win dups
+  workspace_toml?: string       // path, or "auto" to walk up from cwd
+}
+→ JSON-serialized SessionMeta[] (in content[0].text)
+
+get_conversation {
+  id:               string      // required — session UUID
+  format?:          "markdown" | "json"   // default markdown
+  rewrite?:         "wsl-to-win" | "win-to-wsl" | "strip"
+  include_thinking?: boolean    // default false
+  full_results?:    boolean     // default false — results truncated at 600 chars
+}
+→ rendered body (in content[0].text)`}</code></pre>
+</div>
+
+### Exposed resources
+
+One URI template:
+
+```
+convos://conversation/{id}
+```
+
+`resources/read` on a concrete URI returns the session as markdown
+with the default renderer options. Equivalent to calling
+`get_conversation` with no optional args. Useful when an agent's
+UI exposes a "resources" picker distinct from tool calls.
+
+## Portagenty workspace scoping
+
+portagenty's workspace TOML (`*.portagenty.toml`) declares:
+
+- a stable `id` (UUID, survives folder moves)
+- a `projects` list — absolute or `~`-relative paths that belong to this workspace
+
+Point portaconv at the TOML and `list` filters to just those
+projects:
+
+```sh
+# Auto — walks up from cwd looking for *.portagenty.toml
+pconv list --workspace-toml auto
+
+# Explicit path — works from anywhere
+pconv list --workspace-toml /path/to/my-workspace.portagenty.toml
+```
+
+Same flag works via MCP as the `workspace_toml` argument on
+`list_conversations`. When `projects` is missing from the TOML,
+the scope defaults to the TOML's own directory.
+
+<Aside type="note" title="Why workspace scoping matters for agents">
+An agent running inside workspace A should see A's sessions, not every conversation on the machine. Without scoping, a <code>list_conversations</code> call returns the full corpus (~hundreds for a long-time user), blowing the context budget. Workspace-scoped listing keeps the agent focused.
+</Aside>
+
+## Patterns
+
+### 1. Post-`/compact` recovery
+
+After `/compact` in Claude Code, long-context detail is summarized.
+If the agent later needs pre-compact specifics:
+
+```
+# From the agent:
+pconv list --workspace-toml auto --format json
+# (agent picks the relevant old session UUID from the list)
+pconv dump <old-session-id> --full-results > /tmp/pre-compact.md
+# (agent reads the file or inlines the content)
+```
+
+### 2. Cross-tool handoff
+
+Session authored in Claude Code on WSL, continuing in opencode on
+Windows:
+
+```
+pconv dump <id> --rewrite wsl-to-win | clip.exe
+# paste into opencode, which reads the now-Windows-native paths
+```
+
+### 3. Committed recovery artifact
+
+Freeze an important session as a repo-tracked doc so it survives
+Claude Code's retention or a folder move:
+
+```
+mkdir -p docs/agent-context/
+pconv dump <id> --full-results > docs/agent-context/$(date +%F)-redesign-session.md
+git add docs/agent-context/ && git commit -m "capture redesign context"
+```
+
+Re-load it later by pointing a fresh agent at the committed file.
+No daemon, no retention dependency — git is the store.
+
+### 4. Agent-as-curator via MCP
+
+An agent already inside a session calls
+`list_conversations({ workspace_toml: "auto" })`, picks the
+most-relevant prior session, calls `get_conversation({ id, format: "markdown", include_thinking: false })`,
+and prepends the result to its own working context. The user never
+has to copy anything.
+
+## What portaconv doesn't do
+
+<div style="border-left: 4px solid var(--sl-color-orange); padding: 0.6rem 1rem; margin: 1.5rem 0; background: var(--sl-color-orange-low); font-size: 0.9rem;">
+<ul style="margin: 0; padding-left: 1.2rem;">
+  <li>Doesn't write back to any tool's storage. <em>Ever.</em></li>
+  <li>Doesn't run a daemon / watcher / background sync.</li>
+  <li>Doesn't manage clipboards — pipe to <code>clip.exe</code> / <code>pbcopy</code> / <code>wl-copy</code> yourself.</li>
+  <li>Doesn't do full-text search — get-by-id only in v0.1 (search tracked for v0.2+).</li>
+  <li>Doesn't know about portagenty's runtime state — only reads the TOML file at call time.</li>
+</ul>
+</div>
+
+## Planned portagenty shim (not v0.1)
+
+The eventual `pa convos` subcommand will shell out to `pconv` with
+workspace context pre-filled:
+
+```
+# Shorthand for: pconv list --workspace-toml <this-workspace>
+pa convos list
+
+# Shorthand for: pconv dump <id> piped with reasonable defaults
+pa convos dump <id>
+
+# Surfaced when pa's auto-re-register-on-walk-up detects a folder
+# move — prompts the user to run pconv to see old-path sessions.
+```
+
+This ships as a separate PR in the portagenty repo once portaconv
+reaches v0.1 publish. portaconv stays usable standalone.

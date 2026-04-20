@@ -6,9 +6,11 @@ sidebar:
 ---
 
 :::note
-**Implemented today:** `pconv list`, `pconv dump` (markdown + json, path rewriting, thinking/result flags).
-
-**Stubbed:** `pconv mcp serve` — returns a "not implemented" error. Lands in a follow-up release once the rmcp vs community-crate choice is settled.
+All three v0.1 commands are implemented: `pconv list`, `pconv dump`
+(markdown + json, path rewriting, thinking/result flags), and
+`pconv mcp serve` (stdio JSON-RPC 2.0, two tools + one resource
+template). See the [agents + portagenty page](/portaconv/concepts/agents-and-portagenty/)
+for wiring it into Claude Code / opencode.
 :::
 
 ## `pconv list`
@@ -76,13 +78,18 @@ stay untouched.
 
 ## `pconv mcp serve`
 
-Planned stdio MCP server exposing:
+Stdio MCP server speaking JSON-RPC 2.0 (protocol version `2024-11-05`).
+Line-delimited framing — one JSON object per line on stdin/stdout.
 
-- **Tool** `list_conversations(since?, workspace_id?, limit?)`
-- **Tool** `get_conversation(id, format="markdown"|"json", rewrite?)`
-- **Resource** template `convos://conversation/<id>`
+**Tools:**
 
-Intended `mcp.json` wiring when implemented:
+- `list_conversations { min_messages?, show_duplicates?, workspace_toml? }` — same surface as `pconv list`.
+- `get_conversation { id, format?, rewrite?, include_thinking?, full_results? }` — same as `pconv dump`.
+
+**Resources:** one URI template `convos://conversation/{id}`.
+`resources/read` returns the session rendered as markdown with default options.
+
+Wiring into an MCP client (`~/.claude/mcp.json` or equivalent):
 
 ```json
 {
@@ -94,6 +101,10 @@ Intended `mcp.json` wiring when implemented:
   }
 }
 ```
+
+See [agents + portagenty](/portaconv/concepts/agents-and-portagenty/) for
+usage patterns (post-compact recovery, cross-tool handoff, committed
+recovery artifacts).
 
 ## Non-goals for v0.1
 

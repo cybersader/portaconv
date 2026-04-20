@@ -191,9 +191,10 @@ import { Card, CardGrid, Aside } from "@astrojs/starlight/components";
     `--rewrite`, `--include-thinking`, `--full-results`.
   </Card>
   <Card title="pconv mcp serve" icon="seti:config">
-    Stdio MCP server (coming soon). `list_conversations` +
-    `get_conversation` tools; each conversation exposed as
-    `convos://conversation/&lt;id&gt;`.
+    Stdio MCP server. `list_conversations` + `get_conversation`
+    tools with full schema, plus each conversation as a
+    `convos://conversation/&lt;id&gt;` resource. [See the wiring
+    guide](/portaconv/concepts/agents-and-portagenty/).
   </Card>
 </CardGrid>
 
@@ -232,9 +233,14 @@ independently:
 
 ## Status
 
-**v0.0.1 bootstrap, Phase 2 complete.**
-Core model, Claude Code adapter, markdown renderer, and
-path-rewrite transforms all landed. MCP server and list-performance
-optimization queued for follow-up. See the
+**v0.0.1 feature-complete for v0.1.** Core model, Claude Code
+adapter, markdown renderer, path-rewrite transforms, stdio MCP
+server, and portagenty workspace scoping all landed. See the
+[agents + portagenty page](/portaconv/concepts/agents-and-portagenty/)
+for wiring it into Claude Code / opencode, and the
 [Claude Code adapter notes](/portaconv/reference/adapter-claude-code/)
-for the v0.1 record-type contract.
+for the record-type contract.
+
+Polish tracked at [open issues](https://github.com/cybersader/portaconv/issues)
+— canonical-home-file preference (#1 fixed), WSL/Win dedup (#2 fixed),
+list performance cache (#3 v0.2).

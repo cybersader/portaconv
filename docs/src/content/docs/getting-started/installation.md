@@ -6,9 +6,10 @@ sidebar:
 ---
 
 :::note
-**v0.0.1.** `list` and `dump` (including `--rewrite` path transforms)
-are implemented. `mcp serve` lands in a follow-up release. Install
-from source until the crate is published to crates.io.
+**v0.0.1.** All three commands are implemented — `list`, `dump`
+(markdown + json, path rewriting, thinking/result flags), and
+`mcp serve` (stdio MCP for agent integration). Install from source
+until the crate is published to crates.io.
 :::
 
 ## From crates.io (planned, v0.1+)
