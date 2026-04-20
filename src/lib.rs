@@ -1,14 +1,13 @@
-//! portaconv — library crate for the terminal-native conversation
-//! extractor. Public API is intentionally empty in v0.0.1 (bootstrap
-//! only). Modules will land incrementally per the approved plan.
+//! portaconv — terminal-native conversation extractor for agent CLIs.
 //!
-//! See `knowledgebase/03-design-decisions.md` for the locked shape.
-//!
-//! Planned module layout:
-//!   src/model.rs                 — Conversation / Message / ContentBlock
-//!   src/schema/openai.rs         — OpenAI Chat Completions (de)serializer
-//!   src/adapters/claude_code.rs  — P0 adapter reading ~/.claude/projects/
-//!   src/render/markdown.rs       — paste-ready markdown output
-//!   src/transform/paths.rs       — WSL ↔ Windows path rewriting
-//!   src/mcp/mod.rs               — stdio MCP server
-//!   src/cli.rs                   — clap command parsing
+//! Library surface: the shared model types (`Conversation`, `Message`,
+//! `ContentBlock`) and the `ConvoAdapter` trait. The Claude Code
+//! adapter is the only one shipped in v0.1; new adapters are separate
+//! PRs per the locked plan.
+
+pub mod adapters;
+pub mod cli;
+pub mod model;
+
+pub use adapters::{ClaudeCode, ConvoAdapter, SessionMeta, WorkspaceScope};
+pub use model::{ContentBlock, Conversation, Message, Role};

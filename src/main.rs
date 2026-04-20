@@ -1,13 +1,13 @@
-//! pconv — terminal-native conversation extractor for agent CLIs.
-//!
-//! v0.1 status: bootstrap. No commands implemented yet; see
-//! `knowledgebase/` for the design context and
-//! `~/.claude/plans/piped-sauteeing-breeze.md` for the approved plan.
+//! pconv binary entry point. Keep this tiny — unwrap/expect lives here
+//! so library code can stay anyhow-only per the workspace convention.
 
-fn main() -> anyhow::Result<()> {
-    eprintln!(
-        "pconv v0.0.1 — bootstrap only. No commands implemented yet.\n\
-         See knowledgebase/ for design context."
-    );
-    Ok(())
+use clap::Parser;
+use portaconv::cli::{run, Cli};
+
+fn main() {
+    let cli = Cli::parse();
+    if let Err(err) = run(cli) {
+        eprintln!("pconv: {err:#}");
+        std::process::exit(1);
+    }
 }

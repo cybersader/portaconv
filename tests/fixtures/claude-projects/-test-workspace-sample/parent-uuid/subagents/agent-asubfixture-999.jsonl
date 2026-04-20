@@ -1,0 +1,1 @@
+{"type":"user","uuid":"sub-u1","sessionId":"sub-session-should-not-appear","agentId":"asub","cwd":"/test/workspace/sample","timestamp":"2026-04-20T12:30:00.000Z","message":{"role":"user","content":[{"type":"text","text":"Subagent work — must not show in pconv list"}]}}

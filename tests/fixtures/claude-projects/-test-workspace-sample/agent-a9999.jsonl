@@ -1,0 +1,1 @@
+{"type":"user","uuid":"olda-u1","sessionId":"old-agent-session-should-not-appear","agentId":"a9999","cwd":"/test/workspace/sample","timestamp":"2026-04-20T12:40:00.000Z","message":{"role":"user","content":[{"type":"text","text":"Old-style agent JSONL — must also not show"}]}}

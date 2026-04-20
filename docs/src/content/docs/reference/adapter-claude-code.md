@@ -66,6 +66,23 @@ accumulated into `Conversation.extensions.unknown_records[]` with
 their raw JSON — this is the resilience hook the locked plan calls
 for. Don't silently ignore.
 
+**Types observed in production but not in the original spike sample**
+(first real-corpus run on 2026-04-20 surfaced 150 such records across
+5 distinct types in a 457-message session):
+
+| `type` | Payload fields | v0.2 target bucket |
+|---|---|---|
+| `permission-mode` | `permissionMode`, `sessionId` | Extensions — track state changes |
+| `attachment` | `attachment`, `entrypoint`, `cwd`, `sessionId`, plus the standard record-header fields | Extensions until renderer decides how to show |
+| `last-prompt` | `lastPrompt`, `sessionId` | Skip |
+| `custom-title` | `customTitle`, `sessionId` | **Schema** — promote to `Conversation.title` when present (overrides the first-user-message derivation) |
+| `agent-name` | `agentName`, `sessionId` | Extensions — relates to subagent naming |
+
+v0.1 lands these as `unknown_records` via the adapter's catch-all.
+The v0.2 polish pass that promotes them should also re-examine
+whether the sample was too small (likely yes — 6 JSONLs out of 2607
+in the author's corpus).
+
 ## 4. Subagent decision
 
 **Two on-disk shapes observed for subagent sessions:**
