@@ -1,4 +1,26 @@
+# Rust
 /target
-Cargo.lock
+Cargo.lock.bak
+*.pdb
+
+# Editor
 .DS_Store
+.vscode/
+.idea/
 *.swp
+*.swo
+
+# insta snapshot review files
+*.pending-snap
+
+# Docs (Astro / Bun) — mirrors portagenty
+docs/node_modules/
+docs/.astro/
+docs/dist/
+docs/.bun/
+docs/bun.lockb.bak
+
+# Misc
+*.log
+.env
+.env.local

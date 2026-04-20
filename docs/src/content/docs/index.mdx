@@ -1,0 +1,74 @@
+---
+title: portaconv
+description: Terminal-native conversation extractor + MCP server for agent CLIs.
+template: splash
+hero:
+  tagline: Extract any agent CLI's conversation history into paste-ready markdown. Normalize to OpenAI Chat Completions. Rewrite WSL ↔ Windows paths on the way out. Claude Code first; others follow.
+  actions:
+    - text: Get started
+      link: /portaconv/getting-started/installation/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/cybersader/portaconv
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, Aside } from "@astrojs/starlight/components";
+
+## Why
+
+Agent CLIs each keep conversation history in their own format, keyed
+to the absolute path of the directory the tool was launched from. Run
+Claude Code from WSL, then from Windows, and you get two
+`~/.claude/projects/` buckets for the same project — with **content**
+that carries OS-specific absolute paths baked into `cwd`, `file_path`
+tool args, and prose. File-level sync can merge storage but cannot
+fix content-layer divergence.
+
+**portaconv** pivots away from sync and into **extract**. Pick a
+conversation, render it to paste-ready markdown, and drop it into
+any fresh agent session — Claude Code, opencode, claude.ai web, or
+the API. Optionally rewrite paths on the way out.
+
+<Aside type="note">
+Not a viewer. Not a daemon. Not a sync tool. A Unix-pipe-friendly
+extractor. If you want a GUI, [claude-code-history-viewer](https://github.com/jhlee0409/claude-code-history-viewer)
+covers that niche well.
+</Aside>
+
+## Commands (v0.1)
+
+<CardGrid>
+  <Card title="pconv list" icon="list-format">
+    List conversations from any detected agent CLI. Filter by
+    workspace, time, or tool.
+  </Card>
+  <Card title="pconv dump" icon="document">
+    Dump one session to stdout as paste-ready markdown.
+    Opt-in `--rewrite wsl-to-win` / `win-to-wsl` / `strip` transforms.
+  </Card>
+  <Card title="pconv mcp serve" icon="seti:config">
+    Stdio MCP server. `list_conversations` + `get_conversation`
+    tools; each conversation exposed as `convos://conversation/&lt;id&gt;`.
+  </Card>
+</CardGrid>
+
+## How it composes
+
+portaconv is a sibling to [portagenty](https://github.com/cybersader/portagenty)
+(the terminal-native workspace launcher). Use them together or
+independently:
+
+- **Standalone**: `cargo install portaconv`, run `pconv` from any
+  terminal. Reads `~/.claude/projects/` directly.
+- **With portagenty**: future `pa convos` shim passes workspace
+  context to `pconv` so list/dump automatically scope to the
+  current workspace's projects.
+
+## Status
+
+**v0.0.1 bootstrap.** Research spike complete — see the
+[Claude Code adapter notes](/portaconv/reference/adapter-claude-code/)
+for the v0.1 contract. Commands not yet implemented; see the
+repo for progress.
