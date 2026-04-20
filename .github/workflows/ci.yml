@@ -9,6 +9,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
+  # Opt JS actions onto Node 24 now. Node 20 is deprecated on GitHub
+  # runners (forced-migration June 2026, removal September 2026).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   fmt:
