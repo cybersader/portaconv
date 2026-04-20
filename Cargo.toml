@@ -30,6 +30,7 @@ dirs = "5.0"
 thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+regex = "1.10"
 
 [dev-dependencies]
 assert_fs = "1.1"

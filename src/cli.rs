@@ -10,6 +10,8 @@ use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::adapters::{ClaudeCode, ConvoAdapter, WorkspaceScope};
+use crate::render::{render_markdown, MarkdownOptions};
+use crate::transform::{apply_path_rewrite, PathRewrite};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -50,8 +52,42 @@ pub struct DumpArgs {
     /// Session ID (UUID).
     pub session_id: String,
     /// Output format.
-    #[arg(long, value_enum, default_value_t = DumpFormat::Json)]
+    #[arg(long, value_enum, default_value_t = DumpFormat::Markdown)]
     pub format: DumpFormat,
+    /// Include assistant `thinking` blocks in markdown output.
+    #[arg(long)]
+    pub include_thinking: bool,
+    /// Emit full tool-result bodies instead of the short preview.
+    #[arg(long)]
+    pub full_results: bool,
+    /// Append conversation-level system events as a trailing section.
+    #[arg(long)]
+    pub include_system_events: bool,
+    /// Rewrite OS-specific absolute paths inside conversation content.
+    /// Touches Text blocks + tool-call inputs + tool results. Leaves
+    /// `cwd` metadata alone.
+    #[arg(long, value_enum)]
+    pub rewrite: Option<PathRewriteFlag>,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+pub enum PathRewriteFlag {
+    /// `/mnt/c/…` → `C:\…`
+    WslToWin,
+    /// `C:\…` → `/mnt/c/…`
+    WinToWsl,
+    /// Replace any absolute path with the literal `<path>` placeholder.
+    Strip,
+}
+
+impl From<PathRewriteFlag> for PathRewrite {
+    fn from(f: PathRewriteFlag) -> Self {
+        match f {
+            PathRewriteFlag::WslToWin => PathRewrite::WslToWin,
+            PathRewriteFlag::WinToWsl => PathRewrite::WinToWsl,
+            PathRewriteFlag::Strip => PathRewrite::Strip,
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -68,8 +104,11 @@ pub enum ListFormat {
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 pub enum DumpFormat {
+    /// Paste-ready markdown (default) — User / Assistant blocks, tool
+    /// calls as fenced JSON, tool results truncated by default.
+    Markdown,
+    /// Raw normalized model. Stable across adapters.
     Json,
-    // Markdown — lands with the renderer commit.
 }
 
 pub fn run(cli: Cli) -> Result<()> {
@@ -137,10 +176,23 @@ fn run_dump(args: DumpArgs) -> Result<()> {
             "Claude Code storage not found. Expected ~/.claude/projects/ (or set PORTACONV_CLAUDE_ROOT)"
         ));
     }
-    let conv = adapter.load(&args.session_id)?;
+    let mut conv = adapter.load(&args.session_id)?;
+    if let Some(mode) = args.rewrite {
+        apply_path_rewrite(&mut conv, mode.into());
+    }
     let out = io::stdout();
     let mut out = out.lock();
     match args.format {
+        DumpFormat::Markdown => {
+            let opts = MarkdownOptions {
+                include_thinking: args.include_thinking,
+                full_results: args.full_results,
+                include_system_events: args.include_system_events,
+                ..MarkdownOptions::default()
+            };
+            let md = render_markdown(&conv, &opts);
+            out.write_all(md.as_bytes())?;
+        }
         DumpFormat::Json => {
             serde_json::to_writer_pretty(&mut out, &conv)?;
             writeln!(out)?;
