@@ -97,9 +97,35 @@ pconv dump --latest --workspace-toml auto --tail 30
 # (the output records how many were dropped: markdown header line,
 # or JSON extensions.truncated = { tail, original_message_count, dropped })
 
+# Explicit backing-file override — manually pick which duplicate
+pconv dump <id> --file <path>                    # bypass corpus walk, load this exact JSONL
+pconv dump --file <path>                         # if file has a single session, id is optional
+pconv dump --latest --file <path>                # newest session within this file
+
 # Machine format
 pconv dump <id> --format json
 ```
+
+### Manually selecting among duplicate sessionIds
+
+When a workspace has been opened from both WSL and Windows (or the folder has
+moved), the same `sessionId` can exist in two physical JSONLs — one per
+encoded-path bucket under `~/.claude/projects/`. `pconv dump <id>` picks one
+automatically (basename-stem match first, then largest file), which is usually
+right but occasionally not. Use `--file <path>` to override:
+
+```sh
+# Discover the paths for a duplicated id
+pconv list --show-duplicates --format json | jq '.[] | select(.id == "<id>") | .source_path'
+
+# Load the one you actually want
+pconv dump <id> --file "/home/you/.claude/projects/C--your-project/<id>.jsonl"
+```
+
+`--file` conflicts with `--workspace-toml` (workspace scope applies to the
+corpus walk, which `--file` bypasses by design). If the file contains multiple
+sessions (common after `/compact`), pair `--file` with a positional `<id>` or
+`--latest` to pick one; otherwise an error lists the ids available in the file.
 
 `--latest` and a positional `<session-id>` are mutually exclusive.
 `--latest` alone surfaces the most recent session on the whole
@@ -142,7 +168,7 @@ Line-delimited framing — one JSON object per line on stdin/stdout.
 **Tools:**
 
 - `list_conversations { min_messages?, show_duplicates?, workspace_toml?, since?, sort?, reverse?, limit?, grep? }` — same surface as `pconv list`.
-- `get_conversation { id?, latest?, workspace_toml?, format?, rewrite?, include_thinking?, full_results?, tail? }` — same surface as `pconv dump`. Pass `latest: true` (optionally with `workspace_toml`) to resolve the most recent session in scope without a prior `list_conversations` call. `tail: N` keeps only the most-recent N messages and records the drop count.
+- `get_conversation { id?, latest?, workspace_toml?, format?, rewrite?, include_thinking?, full_results?, tail?, file? }` — same surface as `pconv dump`. Pass `latest: true` (optionally with `workspace_toml`) to resolve the most recent session in scope without a prior `list_conversations` call. `tail: N` keeps only the most-recent N messages and records the drop count. `file: "<path>"` bypasses the corpus walk and loads from that specific JSONL — the manual-selection escape hatch for duplicate sessionIds (`file` and `workspace_toml` conflict).
 
 **Resources:** one URI template `convos://conversation/{id}`.
 `resources/read` returns the session rendered as markdown with default options.

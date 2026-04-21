@@ -5,6 +5,7 @@
 //! the `list` / `dump --format json` execution paths.
 
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -13,6 +14,7 @@ use crate::adapters::{
     dedup_sessions, grep_sessions, limit_sessions, parse_since, sort_sessions, ClaudeCode,
     ConvoAdapter, SortKey, WorkspaceScope,
 };
+use crate::model::Conversation;
 use crate::render::{render_markdown, MarkdownOptions};
 use crate::transform::{apply_path_rewrite, PathRewrite};
 
@@ -145,6 +147,14 @@ pub struct DumpArgs {
     /// trade off depth vs length.
     #[arg(long)]
     pub tail: Option<usize>,
+    /// Load from this specific JSONL, bypassing the corpus walk. Escape
+    /// hatch for when a session id lives in multiple files (WSL- and
+    /// Windows-encoded project dirs after cross-OS work) and the
+    /// automatic pick isn't the one you want. Discover paths via
+    /// `pconv list --show-duplicates --format json` and the
+    /// `source_path` field.
+    #[arg(long)]
+    pub file: Option<PathBuf>,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -467,8 +477,13 @@ fn run_dump(args: DumpArgs) -> Result<()> {
             "Claude Code storage not found. Expected ~/.claude/projects/ (or set PORTACONV_CLAUDE_ROOT)"
         ));
     }
-    let target_id = resolve_dump_target(&adapter, &args)?;
-    let mut conv = adapter.load(&target_id)?;
+    let mut conv = match args.file.as_deref() {
+        Some(path) => load_from_file_dispatch(&adapter, path, &args)?,
+        None => {
+            let target_id = resolve_dump_target(&adapter, &args)?;
+            adapter.load(&target_id)?
+        }
+    };
     if let Some(mode) = args.rewrite {
         apply_path_rewrite(&mut conv, mode.into());
     }
@@ -494,4 +509,74 @@ fn run_dump(args: DumpArgs) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Handle `dump --file <path>`. The flag is an explicit override — a
+/// workspace scope makes no sense alongside it (the corpus walk is the
+/// thing being bypassed), so reject that combination loudly.
+/// Otherwise, resolve the session in-file per:
+///   - `<id>` given: parse that file for that id (or error listing what's there)
+///   - `--latest`  : newest session in the file
+///   - neither     : single-session file is used; multi-session errors with the id list
+fn load_from_file_dispatch(
+    adapter: &ClaudeCode,
+    path: &Path,
+    args: &DumpArgs,
+) -> Result<Conversation> {
+    if args.workspace_toml.is_some() {
+        return Err(anyhow!(
+            "--file and --workspace-toml conflict: --file is an explicit backing-file override, workspace scope applies only to the corpus walk"
+        ));
+    }
+    if let Some(id) = args.session_id.as_deref() {
+        if args.latest {
+            return Err(anyhow!(
+                "--latest and a positional session id are mutually exclusive — pick one"
+            ));
+        }
+        return adapter.load_from_file(path, id).with_context(|| {
+            let known = adapter
+                .list_sessions_in_file(path)
+                .ok()
+                .map(|ms| {
+                    ms.iter()
+                        .map(|m| m.id.clone())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            if known.is_empty() {
+                format!("load {id} from {}", path.display())
+            } else {
+                format!(
+                    "load {id} from {} (sessions in file: {known})",
+                    path.display()
+                )
+            }
+        });
+    }
+    let metas = adapter.list_sessions_in_file(path)?;
+    if metas.is_empty() {
+        return Err(anyhow!(
+            "no sessions found in {} — is this a Claude Code JSONL?",
+            path.display()
+        ));
+    }
+    if args.latest {
+        let pick = metas
+            .into_iter()
+            .max_by_key(|m| m.updated_at)
+            .expect("non-empty checked above");
+        return adapter.load_from_file(path, &pick.id);
+    }
+    if metas.len() == 1 {
+        return adapter.load_from_file(path, &metas[0].id);
+    }
+    let ids: Vec<String> = metas.into_iter().map(|m| m.id).collect();
+    Err(anyhow!(
+        "{} contains {} sessions — pass a positional session id or --latest (available: {})",
+        path.display(),
+        ids.len(),
+        ids.join(", ")
+    ))
 }

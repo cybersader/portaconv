@@ -364,6 +364,122 @@ fn list_includes_sessions_from_previous_paths() {
 }
 
 #[test]
+fn dump_file_loads_explicit_backing_file() {
+    // The Windows-encoded copy of the same sessionId lives in a
+    // different project dir with a distinct marker string. Without
+    // `--file`, dump picks the WSL copy (pick_rank size tie-break).
+    // With `--file`, the explicit override wins.
+    let mut win_path = fixture_root();
+    win_path.push("C--test-workspace-sample");
+    win_path.push("aaaaaaaa-bbbb-cccc-dddd-000000000001.jsonl");
+
+    let out = Command::cargo_bin("pconv")
+        .unwrap()
+        .env("PORTACONV_CLAUDE_ROOT", fixture_root())
+        .args([
+            "dump",
+            "aaaaaaaa-bbbb-cccc-dddd-000000000001",
+            "--file",
+            win_path.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let conv: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(conv["messages"].as_array().unwrap().len(), 2);
+    assert!(conv["messages"][0]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("Hello from Windows"));
+}
+
+#[test]
+fn dump_file_alone_works_on_single_session_file() {
+    // No positional id, no --latest: file has exactly one session,
+    // use it. The obvious-default path that keeps the escape hatch
+    // ergonomic when duplicates aren't actually in play.
+    let mut win_path = fixture_root();
+    win_path.push("C--test-workspace-sample");
+    win_path.push("aaaaaaaa-bbbb-cccc-dddd-000000000001.jsonl");
+
+    let out = Command::cargo_bin("pconv")
+        .unwrap()
+        .env("PORTACONV_CLAUDE_ROOT", fixture_root())
+        .args([
+            "dump",
+            "--file",
+            win_path.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let conv: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(conv["id"], "aaaaaaaa-bbbb-cccc-dddd-000000000001");
+}
+
+#[test]
+fn dump_file_bad_id_errors_with_available_ids() {
+    let mut win_path = fixture_root();
+    win_path.push("C--test-workspace-sample");
+    win_path.push("aaaaaaaa-bbbb-cccc-dddd-000000000001.jsonl");
+
+    Command::cargo_bin("pconv")
+        .unwrap()
+        .env("PORTACONV_CLAUDE_ROOT", fixture_root())
+        .args(["dump", "no-such-id", "--file", win_path.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(contains("aaaaaaaa-bbbb-cccc-dddd-000000000001"));
+}
+
+#[test]
+fn dump_file_and_workspace_toml_conflict() {
+    let toml = workspace_fixture("with-previous-paths.portagenty.toml");
+    let mut win_path = fixture_root();
+    win_path.push("C--test-workspace-sample");
+    win_path.push("aaaaaaaa-bbbb-cccc-dddd-000000000001.jsonl");
+
+    Command::cargo_bin("pconv")
+        .unwrap()
+        .env("PORTACONV_CLAUDE_ROOT", fixture_root())
+        .args([
+            "dump",
+            "aaaaaaaa-bbbb-cccc-dddd-000000000001",
+            "--file",
+            win_path.to_str().unwrap(),
+            "--workspace-toml",
+            toml.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("conflict"));
+}
+
+#[test]
+fn dump_file_missing_errors_gracefully() {
+    Command::cargo_bin("pconv")
+        .unwrap()
+        .env("PORTACONV_CLAUDE_ROOT", fixture_root())
+        .args([
+            "dump",
+            "aaaaaaaa-bbbb-cccc-dddd-000000000001",
+            "--file",
+            "/does/not/exist.jsonl",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("not a readable file"));
+}
+
+#[test]
 fn dump_tail_larger_than_conversation_is_noop() {
     let out = Command::cargo_bin("pconv")
         .unwrap()

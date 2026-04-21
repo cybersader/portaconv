@@ -165,6 +165,31 @@ impl ConvoAdapter for ClaudeCode {
     }
 }
 
+impl ClaudeCode {
+    /// Bypass the corpus walk and load a specific file. The escape hatch
+    /// for `dump --file <path>`: when a sessionId lives in more than one
+    /// JSONL (typically WSL- and Windows-encoded project dirs after
+    /// cross-OS work), `load()`'s automatic pick may pick the wrong one.
+    /// This honors the user's explicit choice.
+    pub fn load_from_file(&self, path: &Path, id: &str) -> Result<Conversation> {
+        if !path.is_file() {
+            return Err(anyhow!("--file: {} is not a readable file", path.display()));
+        }
+        parse_session(path, id)
+    }
+
+    /// List the sessions present in a single JSONL. Used to resolve
+    /// `--file --latest` (newest within that file) and to produce a
+    /// useful error message when `--file <path> <id>` targets an id
+    /// that's not in the file.
+    pub fn list_sessions_in_file(&self, path: &Path) -> Result<Vec<SessionMeta>> {
+        if !path.is_file() {
+            return Err(anyhow!("--file: {} is not a readable file", path.display()));
+        }
+        scan_file(path)
+    }
+}
+
 /// Lower rank = higher preference. Tuple ordering does the work:
 ///   1. 0 if basename stem matches id, else 1 (home file wins)
 ///   2. size in bytes, negated so larger wins on tie

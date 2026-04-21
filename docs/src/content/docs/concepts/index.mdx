@@ -182,7 +182,15 @@ Windows, both encoded directories carry a copy of the same session.
 By default `list` dedups them (keeping the entry with the most
 messages). Pass `--show-duplicates` if you want to eyeball both
 copies for manual reconciliation. For `dump`, portaconv picks the
-canonical "home" file (the one named `<uuid>.jsonl`).
+canonical "home" file (the one named `<uuid>.jsonl`), tie-breaking
+by size (larger = fuller history).
+
+When the automatic pick isn't the one you want — say you're
+recovering the older Windows-side state, not the newer WSL tail —
+`dump --file <path>` forces a specific backing JSONL. Discover paths
+via `list --show-duplicates --format json` and the `source_path`
+field; see [commands reference](/portaconv/reference/commands/#manually-selecting-among-duplicate-sessionids)
+for the full flow.
 
 ### Tool-call state doesn't survive the paste
 

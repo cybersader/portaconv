@@ -139,6 +139,10 @@ get_conversation {
   latest?:          boolean     // resolve "most recent in scope"
   workspace_toml?:  string      // scope for latest
 
+  // Backing-file override (conflicts with workspace_toml).
+  // Escape hatch for picking a specific duplicate by path.
+  file?:            string      // load this exact JSONL; id/latest pick session within
+
   // Output shape
   format?:          "markdown" | "json"   // default markdown
   rewrite?:         "wsl-to-win" | "win-to-wsl" | "strip"

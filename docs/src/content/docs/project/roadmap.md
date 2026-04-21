@@ -138,6 +138,11 @@ For context — the following are done and live:
 - Defensive `previous_paths` read — portaconv bridges old-path
   sessions the moment portagenty starts writing the field; no
   portaconv version bump required when that lands upstream
+- `dump --file <path>` — manual override for picking a specific
+  backing JSONL when a sessionId lives in multiple files
+  (WSL- vs Windows-encoded dirs). Paired with
+  `list --show-duplicates --format json` for discovery. Mirrored
+  on `get_conversation` MCP tool as `file`.
 
 If something here looks like it should be on a different tier,
 open an [issue](https://github.com/cybersader/portaconv/issues) and

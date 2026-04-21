@@ -200,6 +200,10 @@ fn tools_list() -> Value {
                         "tail": {
                             "type": "integer",
                             "description": "Keep only the last N messages. Response records the drop count in extensions.truncated (JSON) or the markdown header."
+                        },
+                        "file": {
+                            "type": "string",
+                            "description": "Load from this specific JSONL, bypassing the corpus walk. Escape hatch for manually selecting among duplicate sessionIds (e.g., WSL- vs Windows-encoded project dirs). Pair with `id` to pick which session in the file; `latest: true` picks the newest in-file; alone on a single-session file is fine."
                         }
                     }
                 }
@@ -286,6 +290,65 @@ fn parse_sort_key(s: Option<&str>) -> Result<SortKey, String> {
     }
 }
 
+/// Mirror of `cli::load_from_file_dispatch` for the MCP layer. Same
+/// semantics: `file` + `workspace_toml` conflict; `id` / `latest` /
+/// single-session-file resolve inside the file.
+fn load_from_file_mcp(
+    adapter: &ClaudeCode,
+    path_str: &str,
+    args: &GetArgs,
+) -> Result<crate::model::Conversation, (i32, String)> {
+    if args.workspace_toml.is_some() {
+        return Err((
+            -32602,
+            "get_conversation: `file` and `workspace_toml` conflict — `file` is an explicit override".into(),
+        ));
+    }
+    let path = std::path::Path::new(path_str);
+    let latest = args.latest.unwrap_or(false);
+    if let Some(id) = args.id.as_deref() {
+        if latest {
+            return Err((
+                -32602,
+                "get_conversation: `id` and `latest` are mutually exclusive".into(),
+            ));
+        }
+        return adapter
+            .load_from_file(path, id)
+            .map_err(|e| (-32603, format!("load_from_file failed: {e:#}")));
+    }
+    let metas = adapter
+        .list_sessions_in_file(path)
+        .map_err(|e| (-32603, format!("scan file failed: {e:#}")))?;
+    if metas.is_empty() {
+        return Err((-32603, format!("no sessions in {}", path.display())));
+    }
+    if latest {
+        let pick = metas
+            .into_iter()
+            .max_by_key(|m| m.updated_at)
+            .expect("non-empty");
+        return adapter
+            .load_from_file(path, &pick.id)
+            .map_err(|e| (-32603, format!("load_from_file failed: {e:#}")));
+    }
+    if metas.len() == 1 {
+        return adapter
+            .load_from_file(path, &metas[0].id)
+            .map_err(|e| (-32603, format!("load_from_file failed: {e:#}")));
+    }
+    let ids: Vec<String> = metas.into_iter().map(|m| m.id).collect();
+    Err((
+        -32602,
+        format!(
+            "{} contains {} sessions — pass `id` or `latest: true` (available: {})",
+            path.display(),
+            ids.len(),
+            ids.join(", ")
+        ),
+    ))
+}
+
 /// Mirror of `cli::resolve_dump_target`. Kept in this module so the
 /// MCP handler doesn't have to cross back into cli.rs — the CLI layer
 /// owns argv parsing, and this layer owns JSON-RPC params parsing.
@@ -338,6 +401,8 @@ struct GetArgs {
     full_results: Option<bool>,
     #[serde(default)]
     tail: Option<usize>,
+    #[serde(default)]
+    file: Option<String>,
 }
 
 fn get_conversation(args: Value) -> Result<Value, (i32, String)> {
@@ -347,10 +412,15 @@ fn get_conversation(args: Value) -> Result<Value, (i32, String)> {
     if !adapter.detect() {
         return Err((-32603, "Claude Code storage not detected".into()));
     }
-    let target_id = resolve_mcp_target(&adapter, &args)?;
-    let mut conv = adapter
-        .load(&target_id)
-        .map_err(|e| (-32603, format!("load failed: {e:#}")))?;
+    let mut conv = match args.file.as_deref() {
+        Some(path) => load_from_file_mcp(&adapter, path, &args)?,
+        None => {
+            let target_id = resolve_mcp_target(&adapter, &args)?;
+            adapter
+                .load(&target_id)
+                .map_err(|e| (-32603, format!("load failed: {e:#}")))?
+        }
+    };
     if let Some(kind) = args.rewrite.as_deref() {
         let mode = parse_rewrite(kind).map_err(|e| (-32602, format!("invalid rewrite: {e}")))?;
         apply_path_rewrite(&mut conv, mode);

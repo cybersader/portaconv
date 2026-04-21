@@ -270,6 +270,57 @@ fn get_conversation_missing_id_and_no_latest_errors() {
 }
 
 #[test]
+fn get_conversation_file_arg_loads_explicit_copy() {
+    let mut win_path = fixture_root();
+    win_path.push("C--test-workspace-sample");
+    win_path.push("aaaaaaaa-bbbb-cccc-dddd-000000000001.jsonl");
+
+    let resps = roundtrip(&[json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {
+            "name": "get_conversation",
+            "arguments": {
+                "id": "aaaaaaaa-bbbb-cccc-dddd-000000000001",
+                "file": win_path.to_str().unwrap(),
+                "format": "json"
+            }
+        }
+    })]);
+    let text = resps[0]["result"]["content"][0]["text"].as_str().unwrap();
+    let conv: Value = serde_json::from_str(text).unwrap();
+    // Distinguishing marker from the Windows-encoded copy.
+    assert_eq!(conv["messages"].as_array().unwrap().len(), 2);
+    assert!(conv["messages"][0]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("Hello from Windows"));
+}
+
+#[test]
+fn get_conversation_file_and_workspace_toml_conflict() {
+    let mut win_path = fixture_root();
+    win_path.push("C--test-workspace-sample");
+    win_path.push("aaaaaaaa-bbbb-cccc-dddd-000000000001.jsonl");
+
+    let resps = roundtrip(&[json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {
+            "name": "get_conversation",
+            "arguments": {
+                "id": "aaaaaaaa-bbbb-cccc-dddd-000000000001",
+                "file": win_path.to_str().unwrap(),
+                "workspace_toml": "auto"
+            }
+        }
+    })]);
+    assert_eq!(resps[0]["error"]["code"], -32602);
+    assert!(resps[0]["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("conflict"));
+}
+
+#[test]
 fn rewrite_flag_honored_via_mcp() {
     // Build a conversation that contains a /mnt/c/ path, ask for
     // wsl-to-win via the MCP tool, verify conversion happened. The
