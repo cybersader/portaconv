@@ -1,12 +1,12 @@
 ---
 title: portaconv
-description: Terminal-native conversation extractor + MCP server for agent CLIs.
+description: Pull your Claude Code conversations out as paste-ready markdown. Recover context, hand off between tools, commit to git.
 template: splash
 hero:
-  tagline: Extract any agent CLI's conversation history into paste-ready markdown. Normalize to OpenAI Chat Completions. Rewrite WSL ↔ Windows paths on the way out. Claude Code first; others follow.
+  tagline: Your Claude Code conversations are stuck on one machine in one directory. portaconv pulls any session out as paste-ready markdown so you can recover it, move it to another tool, or commit it to a repo.
   actions:
-    - text: Get started
-      link: /portaconv/getting-started/installation/
+    - text: 60-second walkthrough
+      link: /portaconv/getting-started/quickstart/
       icon: right-arrow
     - text: View on GitHub
       link: https://github.com/cybersader/portaconv
@@ -16,63 +16,91 @@ hero:
 
 import { Card, CardGrid, Aside } from "@astrojs/starlight/components";
 
-## The problem — sync can't fix content
+## Here's what you do
 
-<div style="display: flex; flex-direction: column; gap: 1.25rem; margin: 1.5rem 0;">
-  {/* Two buckets, same project */}
-  <div style="border: 2px solid var(--sl-color-red); border-radius: 12px; padding: 1rem 1.25rem; background: var(--sl-color-red-low);">
-    <div style="font-weight: 700; margin-bottom: 0.75rem; color: var(--sl-color-red-high);">One project · two buckets</div>
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; font-size: 0.85rem;">
-      <div style="background: var(--sl-color-gray-6); border-radius: 8px; padding: 0.75rem;">
-        <div style="font-family: var(--sl-font-mono); opacity: 0.75; font-size: 0.75rem;">launched from WSL</div>
-        <div style="font-weight: 600; margin: 0.3rem 0;"><code>~/.claude/projects/</code></div>
-        <div style="font-family: var(--sl-font-mono); font-size: 0.75rem; word-break: break-all;">-mnt-c-Users-…-proj/</div>
-      </div>
-      <div style="background: var(--sl-color-gray-6); border-radius: 8px; padding: 0.75rem;">
-        <div style="font-family: var(--sl-font-mono); opacity: 0.75; font-size: 0.75rem;">launched from Windows</div>
-        <div style="font-weight: 600; margin: 0.3rem 0;"><code>~/.claude/projects/</code></div>
-        <div style="font-family: var(--sl-font-mono); font-size: 0.75rem; word-break: break-all;">C--Users-…-proj/</div>
-      </div>
-    </div>
-    <div style="margin-top: 0.75rem; font-size: 0.85rem; opacity: 0.8;">
-      Claude Code keys conversation storage by the absolute path of the CWD at launch. WSL and Windows encode the same project two different ways. <code>/resume</code> from one side doesn't see the other.
-    </div>
-  </div>
+Three commands. That's the whole tool.
 
-  <div style="text-align: center; font-size: 1rem; opacity: 0.6;">
-    file-level sync seems like the answer — it isn't
-  </div>
+```sh
+pconv list                          # see your recent sessions
+pconv dump <session-id>             # render one as paste-ready markdown
+pconv dump <session-id> | clip.exe  # WSL — copy to clipboard
+# (use pbcopy on macOS, wl-copy on Wayland)
+```
 
-  {/* Content-layer path poisoning */}
-  <div style="border: 2px solid var(--sl-color-red); border-radius: 12px; padding: 1rem 1.25rem; background: var(--sl-color-red-low);">
-    <div style="font-weight: 700; margin-bottom: 0.5rem; color: var(--sl-color-red-high);">Inside the JSONL · content is path-poisoned</div>
-    <div style="font-family: var(--sl-font-mono); font-size: 0.8rem; background: var(--sl-color-gray-6); border-radius: 6px; padding: 0.75rem; margin-bottom: 0.5rem; overflow-x: auto;">
-      <div style="opacity: 0.7;">Windows-encoded bucket, one 54 MB session:</div>
-      <div style="margin-top: 0.4rem;">
-        <span style="color: var(--sl-color-red-high);">9999+</span>&nbsp;&nbsp;occurrences of&nbsp;<code>/mnt/c/…</code>&nbsp;&nbsp;← WSL paths<br/>
-        <span style="color: var(--sl-color-red-high);">72</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;occurrences of&nbsp;<code>C:\…</code>&nbsp;&nbsp;← Windows paths
-      </div>
-      <div style="margin-top: 0.4rem; opacity: 0.7;">(2026-04-19 spot-check; see the design notes for the full write-up)</div>
-    </div>
-    <div style="font-size: 0.85rem; opacity: 0.8;">
-      Symlinks, Docker bind mounts, polling sync — all merge <em>storage</em> and leave the content alone. A Windows-launched Claude Code resuming a WSL-authored session fails the first time it tries to Read <code>/mnt/c/…</code>.
-    </div>
-  </div>
+Paste into a new Claude Code session, claude.ai, opencode, whatever
+— the conversation keeps going. If the session was authored on a
+different OS, add `--rewrite wsl-to-win` (or `win-to-wsl`) so paths
+inside the content get translated on the way out.
 
-  <div style="text-align: center; font-size: 1rem; opacity: 0.6;">
-    portaconv flips the approach
-  </div>
+**Even faster, inside a portagenty workspace:**
 
-  {/* Extract, paste */}
-  <div style="border: 2px solid var(--sl-color-green); border-radius: 12px; padding: 1rem 1.25rem; background: var(--sl-color-green-low);">
-    <div style="font-weight: 700; margin-bottom: 0.5rem; color: var(--sl-color-green-high);">Extract · rewrite · paste</div>
-    <div style="font-size: 0.9rem; opacity: 0.85;">
-      Don't fight the on-disk split. Read the substantive dialogue out, normalize it, optionally rewrite paths on the way out, and let the human (or another agent) paste it into a fresh session anywhere. A fresh session has no embedded paths — no OS-specific failure mode. On-demand reads. No daemon. No race windows. Composes with pipes.
+```sh
+# Skip the list + copy UUID dance — just grab the most recent
+# session in this workspace and send it straight to the clipboard.
+pconv dump --latest --workspace-toml auto | clip.exe
+
+# Long session? Keep only the last 50 messages.
+pconv dump --latest --workspace-toml auto --tail 50 | clip.exe
+```
+
+<Aside type="tip" title="Want the full tour?">
+The [60-second quickstart](/portaconv/getting-started/quickstart/)
+walks through install → first dump → MCP wiring end-to-end.
+</Aside>
+
+## When you'd reach for this
+
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; margin: 1.5rem 0;">
+  <a href="/portaconv/concepts/agents-and-portagenty/" style="text-decoration: none; color: inherit;">
+    <div style="border: 2px solid var(--sl-color-accent); border-radius: 10px; padding: 1rem; background: var(--sl-color-accent-low); height: 100%;">
+      <div style="font-weight: 700; margin-bottom: 0.4rem;">Cross-machine / cross-tool</div>
+      <div style="font-size: 0.85rem; opacity: 0.85;">"I was in a session last night and now I'm on a different machine or tool." Dump it, rewrite paths if needed, paste it into the new agent.</div>
     </div>
-  </div>
+  </a>
+  <a href="/portaconv/concepts/agents-and-portagenty/" style="text-decoration: none; color: inherit;">
+    <div style="border: 2px solid var(--sl-color-accent); border-radius: 10px; padding: 1rem; background: var(--sl-color-accent-low); height: 100%;">
+      <div style="font-weight: 700; margin-bottom: 0.4rem;">After <code>/compact</code></div>
+      <div style="font-size: 0.85rem; opacity: 0.85;">"I ran <code>/compact</code> and immediately wished I still had the detail." Grab the pre-compact session by id and paste the full version back into the chat.</div>
+    </div>
+  </a>
+  <a href="/portaconv/concepts/agents-and-portagenty/" style="text-decoration: none; color: inherit;">
+    <div style="border: 2px solid var(--sl-color-accent); border-radius: 10px; padding: 1rem; background: var(--sl-color-accent-low); height: 100%;">
+      <div style="font-weight: 700; margin-bottom: 0.4rem;">Commit to the repo</div>
+      <div style="font-size: 0.85rem; opacity: 0.85;">"I want to save this important conversation before retention wipes it." <code>pconv dump &lt;id&gt; &gt; docs/agent-context/session.md</code>, commit, move on.</div>
+    </div>
+  </a>
+  <a href="/portaconv/concepts/agents-and-portagenty/" style="text-decoration: none; color: inherit;">
+    <div style="border: 2px solid var(--sl-color-accent); border-radius: 10px; padding: 1rem; background: var(--sl-color-accent-low); height: 100%;">
+      <div style="font-weight: 700; margin-bottom: 0.4rem;">Agent needs past context</div>
+      <div style="font-size: 0.85rem; opacity: 0.85;">"I'm writing an agent that should automatically pull in yesterday's work." Wire MCP into its config; it calls <code>list_conversations</code> and <code>get_conversation</code> directly.</div>
+    </div>
+  </a>
 </div>
 
-## Pipeline — JSONL to paste-ready
+## Commands
+
+<CardGrid>
+  <Card title="pconv list" icon="list-format">
+    List conversations discoverable on this machine. Filter by
+    `--workspace-toml auto`, `--since 2d`, or `--grep refactor`;
+    sort with `--sort msgs|title|started`; cap with `--limit`.
+    Table or JSON output.
+  </Card>
+  <Card title="pconv dump" icon="document">
+    Dump one session to stdout. `--latest --workspace-toml auto`
+    skips the id-copy step. `--tail N` keeps only the last N
+    messages. `--rewrite wsl-to-win|win-to-wsl|strip` translates
+    paths. Default output: paste-ready markdown.
+  </Card>
+  <Card title="pconv mcp serve" icon="seti:config">
+    Stdio MCP server. `list_conversations` + `get_conversation`
+    tools with typed schemas (every CLI flag mirrored), plus each
+    conversation as a `convos://conversation/&lt;id&gt;` resource.
+    [See wiring guide](/portaconv/concepts/agents-and-portagenty/).
+  </Card>
+</CardGrid>
+
+## Pipeline
 
 <div style="display: flex; flex-direction: column; gap: 0; margin: 1.75rem 0; align-items: center;">
   {/* row: on-disk */}
@@ -175,49 +203,78 @@ import { Card, CardGrid, Aside } from "@astrojs/starlight/components";
 </div>
 
 <Aside type="note" title="What paths are NOT rewritten">
-`Conversation.cwd` and per-message `extensions` are metadata about the authoring environment — they describe the session, not its content. They're preserved verbatim so you can still see where the session ran. Only text blocks + tool-call args + tool-result bodies are rewritten.
+`Conversation.cwd` and per-message `extensions` are metadata about the authoring environment — they describe the session, not its content. Only text blocks + tool-call args + tool-result bodies are rewritten.
 </Aside>
 
-## Commands (v0.1)
+## Why this exists
 
-<CardGrid>
-  <Card title="pconv list" icon="list-format">
-    List conversations from any detected agent CLI. Filter by
-    workspace, time, or tool. Table or JSON output.
-  </Card>
-  <Card title="pconv dump" icon="document">
-    Dump one session to stdout. Default output is paste-ready
-    markdown with tool calls and truncated results. Opt-in flags:
-    `--rewrite`, `--include-thinking`, `--full-results`.
-  </Card>
-  <Card title="pconv mcp serve" icon="seti:config">
-    Stdio MCP server. `list_conversations` + `get_conversation`
-    tools with full schema, plus each conversation as a
-    `convos://conversation/&lt;id&gt;` resource. [See the wiring
-    guide](/portaconv/concepts/agents-and-portagenty/).
-  </Card>
-</CardGrid>
+<details>
+<summary><strong>The underlying problem (optional reading)</strong></summary>
 
-## Design principles
+<div style="display: flex; flex-direction: column; gap: 1.25rem; margin: 1.5rem 0;">
+  {/* Two buckets, same project */}
+  <div style="border: 2px solid var(--sl-color-red); border-radius: 12px; padding: 1rem 1.25rem; background: var(--sl-color-red-low);">
+    <div style="font-weight: 700; margin-bottom: 0.75rem; color: var(--sl-color-red-high);">One project · two buckets</div>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; font-size: 0.85rem;">
+      <div style="background: var(--sl-color-gray-6); border-radius: 8px; padding: 0.75rem;">
+        <div style="font-family: var(--sl-font-mono); opacity: 0.75; font-size: 0.75rem;">launched from WSL</div>
+        <div style="font-weight: 600; margin: 0.3rem 0;"><code>~/.claude/projects/</code></div>
+        <div style="font-family: var(--sl-font-mono); font-size: 0.75rem; word-break: break-all;">-mnt-c-Users-…-proj/</div>
+      </div>
+      <div style="background: var(--sl-color-gray-6); border-radius: 8px; padding: 0.75rem;">
+        <div style="font-family: var(--sl-font-mono); opacity: 0.75; font-size: 0.75rem;">launched from Windows</div>
+        <div style="font-weight: 600; margin: 0.3rem 0;"><code>~/.claude/projects/</code></div>
+        <div style="font-family: var(--sl-font-mono); font-size: 0.75rem; word-break: break-all;">C--Users-…-proj/</div>
+      </div>
+    </div>
+    <div style="margin-top: 0.75rem; font-size: 0.85rem; opacity: 0.8;">
+      Claude Code keys conversation storage by the absolute path of the CWD at launch. WSL and Windows encode the same project two different ways. <code>/resume</code> from one side doesn't see the other.
+    </div>
+  </div>
 
-<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem; margin: 1.5rem 0;">
-  <div style="border: 1px solid var(--sl-color-gray-4); border-radius: 10px; padding: 0.75rem 1rem; background: var(--sl-color-gray-6);">
-    <div style="font-weight: 700; margin-bottom: 0.3rem;">Read-only</div>
-    <div style="font-size: 0.8rem; opacity: 0.8;">Never writes to any tool's storage. On-demand reads. No daemon, no file watching.</div>
+  <div style="text-align: center; font-size: 1rem; opacity: 0.6;">
+    file-level sync seems like the answer — it isn't
   </div>
-  <div style="border: 1px solid var(--sl-color-gray-4); border-radius: 10px; padding: 0.75rem 1rem; background: var(--sl-color-gray-6);">
-    <div style="font-weight: 700; margin-bottom: 0.3rem;">Resilient</div>
-    <div style="font-size: 0.8rem; opacity: 0.8;">Unknown record types preserved in <code>extensions.unknown_records</code>. Adapter version drift doesn't crash the load.</div>
+
+  {/* Content-layer path poisoning */}
+  <div style="border: 2px solid var(--sl-color-red); border-radius: 12px; padding: 1rem 1.25rem; background: var(--sl-color-red-low);">
+    <div style="font-weight: 700; margin-bottom: 0.5rem; color: var(--sl-color-red-high);">Inside the JSONL · content is path-poisoned</div>
+    <div style="font-family: var(--sl-font-mono); font-size: 0.8rem; background: var(--sl-color-gray-6); border-radius: 6px; padding: 0.75rem; margin-bottom: 0.5rem; overflow-x: auto;">
+      <div style="opacity: 0.7;">Windows-encoded bucket, one 54 MB session:</div>
+      <div style="margin-top: 0.4rem;">
+        <span style="color: var(--sl-color-red-high);">9999+</span>&nbsp;&nbsp;occurrences of&nbsp;<code>/mnt/c/…</code>&nbsp;&nbsp;← WSL paths<br/>
+        <span style="color: var(--sl-color-red-high);">72</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;occurrences of&nbsp;<code>C:\…</code>&nbsp;&nbsp;← Windows paths
+      </div>
+    </div>
+    <div style="font-size: 0.85rem; opacity: 0.8;">
+      Symlinks, Docker bind mounts, polling sync — all merge <em>storage</em> and leave the content alone. A Windows-launched Claude Code resuming a WSL-authored session fails the first time it tries to Read <code>/mnt/c/…</code>.
+    </div>
   </div>
-  <div style="border: 1px solid var(--sl-color-gray-4); border-radius: 10px; padding: 0.75rem 1rem; background: var(--sl-color-gray-6);">
-    <div style="font-weight: 700; margin-bottom: 0.3rem;">Composable</div>
-    <div style="font-size: 0.8rem; opacity: 0.8;">Unix-pipe-friendly stdout. JSON for machine processing. Markdown for humans. No built-in clipboard — pipe to <code>clip.exe</code> / <code>pbcopy</code> yourself.</div>
+
+  <div style="text-align: center; font-size: 1rem; opacity: 0.6;">
+    portaconv flips the approach
   </div>
-  <div style="border: 1px solid var(--sl-color-gray-4); border-radius: 10px; padding: 0.75rem 1rem; background: var(--sl-color-gray-6);">
-    <div style="font-weight: 700; margin-bottom: 0.3rem;">Future-accounting</div>
-    <div style="font-size: 0.8rem; opacity: 0.8;">OpenAI-shape core + extensions bag means new tools slot in without a schema migration.</div>
+
+  {/* Extract, paste */}
+  <div style="border: 2px solid var(--sl-color-green); border-radius: 12px; padding: 1rem 1.25rem; background: var(--sl-color-green-low);">
+    <div style="font-weight: 700; margin-bottom: 0.5rem; color: var(--sl-color-green-high);">Extract · rewrite · paste</div>
+    <div style="font-size: 0.9rem; opacity: 0.85;">
+      Don't fight the on-disk split. Read the substantive dialogue out, normalize it, optionally rewrite paths on the way out, and let the human (or another agent) paste it into a fresh session anywhere. A fresh session has no embedded paths — no OS-specific failure mode. On-demand reads. No daemon. No race windows. Composes with pipes.
+    </div>
   </div>
 </div>
+
+</details>
+
+## What you can rely on
+
+Read-only. No daemon. No file watching. `pconv` never writes to
+Claude's storage — close the process and nothing's running. Every
+feature has explicit reliability tiers: what's always the same, what's
+opt-in, what could drift as Claude evolves. See the
+[reliability tiers table](/portaconv/concepts/#reliability-tiers)
+for the full breakdown — it's the first thing to read if you're
+scripting against portaconv.
 
 ## How it composes
 
@@ -235,12 +292,9 @@ independently:
 
 **v0.0.1 feature-complete for v0.1.** Core model, Claude Code
 adapter, markdown renderer, path-rewrite transforms, stdio MCP
-server, and portagenty workspace scoping all landed. See the
+server, portagenty workspace scoping, and per-file list cache all
+landed. See the
 [agents + portagenty page](/portaconv/concepts/agents-and-portagenty/)
 for wiring it into Claude Code / opencode, and the
 [Claude Code adapter notes](/portaconv/reference/adapter-claude-code/)
-for the record-type contract.
-
-Polish tracked at [open issues](https://github.com/cybersader/portaconv/issues)
-— canonical-home-file preference (#1 fixed), WSL/Win dedup (#2 fixed),
-list performance cache (#3 v0.2).
+for the v0.1 record-type contract.

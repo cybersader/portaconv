@@ -30,11 +30,26 @@ cd portaconv
 cargo install --path .
 ```
 
-## Verify
+## Verify it works
 
 ```sh
+# Version check
 pconv --version
+
+# Does pconv see your Claude Code storage?
+pconv list --format json | jq 'length'
+
+# Peek at the shape of one session entry (needs jq)
+pconv list --format json | jq '.[0]'
 ```
+
+If `list` returns `0` but you've used Claude Code, you may be
+running as a different user than the one who owns `~/.claude/`.
+Override the root with the `PORTACONV_CLAUDE_ROOT` environment
+variable to point elsewhere.
+
+Once this works, the [quickstart](/portaconv/getting-started/quickstart/)
+walks through dumping a session, path rewriting, and MCP wiring.
 
 ## Requirements
 

@@ -1,16 +1,106 @@
 ---
 title: Concepts
-description: How portaconv thinks about conversation history.
+description: How portaconv thinks about conversations — trust invariants, user-facing pipeline, and the edge cases you'll hit.
 sidebar:
   order: 1
 ---
 
 import { Aside } from "@astrojs/starlight/components";
 
-portaconv sits between a handful of non-obvious ideas. Skim these
-before the reference.
+If you're new, start with the [60-second quickstart](/portaconv/getting-started/quickstart/) —
+you'll be running `pconv` before you read any of this. This page
+covers the "wait, what's actually happening" questions you might
+have after the tool starts returning data.
 
-## The three layers
+## What you can rely on
+
+Before anything else: **portaconv never writes to any tool's
+storage.** Not a byte. There is no daemon, no file watcher, no
+auto-sync. Every `pconv` invocation reads the current state of
+disk and emits output to stdout. Close the process and nothing's
+running.
+
+If you ever wonder "is this going to corrupt my Claude state?",
+the answer is no, by construction. The worst portaconv can do is
+crash or print garbage to your terminal.
+
+That's the foundational invariant. The rest of the system is
+layered on top with explicit reliability tiers — worth knowing
+if you're automating against the tool.
+
+### Reliability tiers
+
+<div style="overflow-x: auto; margin: 1.25rem 0;">
+<table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+  <thead>
+    <tr style="background: var(--sl-color-gray-6);">
+      <th style="text-align: left; padding: 0.5rem; border-bottom: 2px solid var(--sl-color-gray-4);">Layer</th>
+      <th style="text-align: left; padding: 0.5rem; border-bottom: 2px solid var(--sl-color-gray-4); color: var(--sl-color-green-high);">Always the same</th>
+      <th style="text-align: left; padding: 0.5rem; border-bottom: 2px solid var(--sl-color-gray-4); color: var(--sl-color-blue-high);">Opt-in (off by default)</th>
+      <th style="text-align: left; padding: 0.5rem; border-bottom: 2px solid var(--sl-color-gray-4); color: var(--sl-color-orange-high);">Could drift</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5); font-weight: 600;">Read path</td>
+      <td style="padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5);">Read-only; stdio-only output; cache miss always falls back to full scan.</td>
+      <td style="padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5);"><code>--no-cache</code> bypasses cache entirely.</td>
+      <td style="padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5);">Claude Code on-disk format — new record types get captured in <code>extensions.unknown_records</code>, never silently dropped.</td>
+    </tr>
+    <tr>
+      <td style="padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5); font-weight: 600;">Normalization</td>
+      <td style="padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5);">OpenAI outer + Anthropic inner content-blocks. Subagent filter rules fixed (path + filename match). <strong><code>cwd</code> metadata never rewritten</strong>; only content is.</td>
+      <td style="padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5);"><code>--rewrite</code> transforms (<code>wsl-to-win</code>, <code>win-to-wsl</code>, <code>strip</code>).</td>
+      <td style="padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5);">New Claude record types land in unknowns bag until a future adapter bump promotes them.</td>
+    </tr>
+    <tr>
+      <td style="padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5); font-weight: 600;">Dedup & selection</td>
+      <td style="padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5);">Dedup keeps highest message_count (tie: most recent <code>updated_at</code>). <code>--latest</code> picks first after dedup+sort. Byte-reproducible on stable corpus.</td>
+      <td style="padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5);"><code>--show-duplicates</code> skips dedup. <code>--sort</code> / <code>--reverse</code> / <code>--limit</code>.</td>
+      <td style="padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5);">Relative <code>--since 2d</code> is resolved against wall clock at invocation (by design).</td>
+    </tr>
+    <tr>
+      <td style="padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5); font-weight: 600;">Output</td>
+      <td style="padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5);">Same input → same bytes. Markdown structure is stable. Any truncation is self-documented in the header + <code>extensions.truncated</code>.</td>
+      <td style="padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5);"><code>--tail</code>, <code>--include-thinking</code>, <code>--full-results</code>, <code>--include-system-events</code>. All off by default.</td>
+      <td style="padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5);">—</td>
+    </tr>
+    <tr>
+      <td style="padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5); font-weight: 600;">Cache & state</td>
+      <td style="padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5);">Schema-versioned — bump invalidates the old cache gracefully. Corrupt/missing cache = full walk. Never the source of truth.</td>
+      <td style="padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5);"><code>PORTACONV_CACHE_ROOT</code> env overrides location.</td>
+      <td style="padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5);">Cache is machine-local, not portable. Delete anytime; no data loss.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+### What paste does NOT preserve
+
+<div style="border-left: 4px solid var(--sl-color-orange); padding: 0.6rem 1rem; margin: 1.5rem 0; background: var(--sl-color-orange-low); font-size: 0.9rem;">
+<p style="margin: 0 0 0.5rem 0;"><strong>Lossy by design</strong> — don't expect any of these to survive:</p>
+<ul style="margin: 0; padding-left: 1.2rem;">
+  <li><strong>Tool-call runtime state.</strong> The new agent has no running tools and no live file state. Tool <em>args</em> and <em>results</em> survive; the actual live process does not.</li>
+  <li><strong>Subagent internal reasoning.</strong> Filtered out at the adapter layer. The parent session's <code>tool_use</code> + <code>tool_result</code> already carries the consolidated output.</li>
+  <li><strong>Internal Claude metadata records</strong> — <code>file-history-snapshot</code>, <code>progress</code>, <code>queue-operation</code> are dropped (they're not part of the conversation's substance).</li>
+  <li><strong>Conversation identity across paste.</strong> You're starting a new session in the new tool; the sessionId changes. portaconv preserves the <em>content</em>, not the identity.</li>
+</ul>
+</div>
+
+### Predictability checklist
+
+If you're scripting against portaconv, these are safe assumptions:
+
+- Same JSONL bytes + same flags → same output bytes (within the same pconv version).
+- `--format json` is a stable contract at the field level; extensions may gain fields but won't rename or drop core ones.
+- Exit codes: `0` success, non-zero any error, `stderr` carries the message.
+- `--grep` never matches message content — only title and cwd. "Full-content search" stays a separate verb if/when it lands.
+- `--tail N` on a session with fewer than N messages is a no-op (no spurious truncation marker).
+
+## How portaconv sees a conversation
+
+Three layers between the JSONL on your disk and the markdown in
+your clipboard:
 
 <div style="display: flex; flex-direction: column; gap: 0.5rem; margin: 1.5rem 0;">
   <div style="display: grid; grid-template-columns: 8rem 1fr; gap: 0.75rem; align-items: stretch;">
@@ -19,8 +109,8 @@ before the reference.
       <div style="font-size: 0.7rem; font-family: var(--sl-font-mono); opacity: 0.7;">tool-specific</div>
     </div>
     <div style="padding: 0.4rem 0;">
-      <div style="font-weight: 600; font-size: 0.9rem;">Read and normalize one tool's on-disk shape</div>
-      <div style="font-size: 0.85rem; opacity: 0.8; margin-top: 0.2rem;">v0.1 ships the Claude Code adapter. The trait is small — <code>detect</code>, <code>list</code>, <code>load(id)</code> — so future adapters (opencode, Cursor, Aider, continue.dev) can land one-at-a-time without reshaping the core.</div>
+      <div style="font-weight: 600; font-size: 0.9rem;">"We read what your tool saved."</div>
+      <div style="font-size: 0.85rem; opacity: 0.8; margin-top: 0.2rem;">v0.1 has one adapter — Claude Code. It reads <code>~/.claude/projects/*/*.jsonl</code>, handles Claude's two on-disk encoding shapes (WSL + Windows), skips subagent files, and splits out sessions that share a file after <code>/compact</code>.</div>
     </div>
   </div>
   <div style="display: grid; grid-template-columns: 8rem 1fr; gap: 0.75rem; align-items: stretch;">
@@ -29,23 +119,83 @@ before the reference.
       <div style="font-size: 0.7rem; font-family: var(--sl-font-mono); opacity: 0.7;">tool-agnostic</div>
     </div>
     <div style="padding: 0.4rem 0;">
-      <div style="font-weight: 600; font-size: 0.9rem;">One <code>Conversation</code> type, shape-compatible with OpenAI Chat Completions</div>
-      <div style="font-size: 0.85rem; opacity: 0.8; margin-top: 0.2rem;">Anthropic content-blocks preserved inside (<code>text</code> / <code>tool_use</code> / <code>tool_result</code> / <code>thinking</code>). Extensions bags at both conversation and message level carry tool-specific bits without polluting the core types.</div>
+      <div style="font-weight: 600; font-size: 0.9rem;">"We normalize it to one shape."</div>
+      <div style="font-size: 0.85rem; opacity: 0.8; margin-top: 0.2rem;">One <code>Conversation</code> type that every future adapter (opencode, Cursor, Aider…) will target. OpenAI Chat Completions on the outside, Anthropic content-blocks inside, so tool calls + thinking survive without flattening.</div>
     </div>
   </div>
   <div style="display: grid; grid-template-columns: 8rem 1fr; gap: 0.75rem; align-items: stretch;">
     <div style="background: var(--sl-color-purple-low); border: 2px solid var(--sl-color-purple); border-radius: 10px; padding: 0.5rem 0.75rem; display: flex; flex-direction: column; justify-content: center; text-align: center;">
-      <div style="font-weight: 700; font-size: 0.9rem;">Renderer + transforms</div>
+      <div style="font-weight: 700; font-size: 0.9rem;">Renderer</div>
       <div style="font-size: 0.7rem; font-family: var(--sl-font-mono); opacity: 0.7;">output shape</div>
     </div>
     <div style="padding: 0.4rem 0;">
-      <div style="font-weight: 600; font-size: 0.9rem;">Format and optionally rewrite on the way out</div>
-      <div style="font-size: 0.85rem; opacity: 0.8; margin-top: 0.2rem;"><code>markdown</code> for humans and agents, <code>json</code> for machines. Path-rewrite transforms (<code>wsl-to-win</code>, <code>win-to-wsl</code>, <code>strip</code>) are opt-in and apply to content only — <code>cwd</code> metadata stays verbatim.</div>
+      <div style="font-weight: 600; font-size: 0.9rem;">"We format it for you."</div>
+      <div style="font-size: 0.85rem; opacity: 0.8; margin-top: 0.2rem;"><code>markdown</code> for humans and agents, <code>json</code> for machines. Path-rewrite transforms (<code>wsl-to-win</code>, <code>win-to-wsl</code>, <code>strip</code>) optionally run between model and renderer. They touch content only — never metadata like <code>cwd</code>.</div>
     </div>
   </div>
 </div>
 
+## Edge cases you'll hit
+
+portaconv is explicit about the weird corners of Claude Code's
+storage, so you know what to expect when output looks unexpected.
+
+### Subagent sessions are filtered
+
+Subagents — the reasoning loops triggered by a parent session's
+tool_use — don't show up in `pconv list` by default. They're
+transient, and the parent session's tool_use + tool_result already
+captures their consolidated output. Two on-disk shapes exist, both
+filtered:
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin: 1rem 0 1.5rem;">
+  <div style="border: 1px solid var(--sl-color-gray-4); border-radius: 10px; padding: 0.75rem; background: var(--sl-color-gray-6);">
+    <div style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.3rem;">old shape <span style="font-weight: 400; opacity: 0.6; font-family: var(--sl-font-mono); font-size: 0.75rem;">Claude ≤ 2.0.x</span></div>
+    <div style="font-family: var(--sl-font-mono); font-size: 0.75rem; opacity: 0.85;">
+      &lt;project-dir&gt;/<br/>
+      &nbsp;&nbsp;agent-&lt;hash&gt;.jsonl
+    </div>
+  </div>
+  <div style="border: 1px solid var(--sl-color-gray-4); border-radius: 10px; padding: 0.75rem; background: var(--sl-color-gray-6);">
+    <div style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.3rem;">new shape <span style="font-weight: 400; opacity: 0.6; font-family: var(--sl-font-mono); font-size: 0.75rem;">Claude ≥ 2.1.x</span></div>
+    <div style="font-family: var(--sl-font-mono); font-size: 0.75rem; opacity: 0.85;">
+      &lt;project-dir&gt;/<br/>
+      &nbsp;&nbsp;&lt;parent-uuid&gt;/<br/>
+      &nbsp;&nbsp;&nbsp;&nbsp;subagents/<br/>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;agent-*.jsonl
+    </div>
+  </div>
+</div>
+
+### A single JSONL can hold multiple sessions
+
+When Claude's `/compact` writes a continuation under a new session
+UUID, it keeps appending to the same on-disk file. portaconv surfaces
+each distinct sessionId as its own entry in `list` — matching Claude's
+own `/resume` mental model where the sessionId (not the file) is the
+identity.
+
+### Same session, multiple files
+
+If you've launched Claude Code on a project from both WSL and
+Windows, both encoded directories carry a copy of the same session.
+By default `list` dedups them (keeping the entry with the most
+messages). Pass `--show-duplicates` if you want to eyeball both
+copies for manual reconciliation. For `dump`, portaconv picks the
+canonical "home" file (the one named `<uuid>.jsonl`).
+
+### Tool-call state doesn't survive the paste
+
+The renderer preserves the **intent** of a tool call (name + args)
+and the result body, but when you paste the output into a fresh
+agent, that agent has no live tools and no running filesystem state.
+Tools are re-runnable against the current directory — that's fine
+for most recovery. If the exact mid-turn state of a tool mattered,
+paste-recovery is the wrong shape for the job.
+
 ## The `Conversation` shape
+
+The normalized model, for reference:
 
 <div style="background: var(--sl-color-gray-6); border-radius: 10px; padding: 1rem; margin: 1.5rem 0; font-family: var(--sl-font-mono); font-size: 0.85rem;">
 <pre style="margin: 0;"><code>{`Conversation {
@@ -74,14 +224,19 @@ before the reference.
 </div>
 
 <Aside type="note" title="Why extensions bags">
-Every tool we'll ever adapt has fields the core schema doesn't promote (Claude Code has <code>gitBranch</code>, <code>permissionMode</code>, <code>thinkingMetadata</code>, <code>isCompactSummary</code>, …). Flattening them into the core pollutes the model; dropping them loses data. A <code>serde_json::Value</code> extensions bag at both levels is the third option — tool-specific bits survive the round trip without the core types having to know about them.
+Every tool we'll ever adapt has fields the core schema doesn't promote
+(Claude Code has <code>gitBranch</code>, <code>permissionMode</code>,
+<code>thinkingMetadata</code>, <code>isCompactSummary</code>, …).
+Flattening them into the core pollutes the model; dropping them loses
+data. A <code>serde_json::Value</code> extensions bag at both levels
+is the third option — tool-specific bits survive the round trip
+without the core types having to know about them.
 </Aside>
 
-## What the adapter classifies
+## How the adapter classifies records
 
-The Claude Code adapter encounters six top-level record types in
-practice plus five more surfaced in production after the initial
-spike. Each falls into one of three buckets:
+Each line of a Claude Code JSONL is one record. Types we've seen in
+practice fall into three buckets:
 
 <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem; margin: 1.5rem 0;">
   <div style="border: 2px solid var(--sl-color-green); border-radius: 10px; padding: 0.75rem; background: var(--sl-color-green-low);">
@@ -116,51 +271,5 @@ spike. Each falls into one of three buckets:
   </div>
 </div>
 
-The full per-record contract is in the
+Full per-record contract in the
 [adapter notes](/portaconv/reference/adapter-claude-code/).
-
-## Subagent filter
-
-Subagent sessions are transient — they're called by a parent session's
-tool_use, do their work, and return a consolidated result. Listing
-them alongside top-level sessions in <code>pconv list</code> is noise
-for paste workflows, so the adapter filters them out. Two shapes exist:
-
-<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin: 1.5rem 0;">
-  <div style="border: 1px solid var(--sl-color-gray-4); border-radius: 10px; padding: 0.75rem; background: var(--sl-color-gray-6);">
-    <div style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.3rem;">old shape <span style="font-weight: 400; opacity: 0.6; font-family: var(--sl-font-mono); font-size: 0.75rem;">Claude ≤ 2.0.x</span></div>
-    <div style="font-family: var(--sl-font-mono); font-size: 0.75rem; opacity: 0.85;">
-      &lt;project-dir&gt;/<br/>
-      &nbsp;&nbsp;agent-&lt;hash&gt;.jsonl
-    </div>
-  </div>
-  <div style="border: 1px solid var(--sl-color-gray-4); border-radius: 10px; padding: 0.75rem; background: var(--sl-color-gray-6);">
-    <div style="font-weight: 600; font-size: 0.85rem; margin-bottom: 0.3rem;">new shape <span style="font-weight: 400; opacity: 0.6; font-family: var(--sl-font-mono); font-size: 0.75rem;">Claude ≥ 2.1.x</span></div>
-    <div style="font-family: var(--sl-font-mono); font-size: 0.75rem; opacity: 0.85;">
-      &lt;project-dir&gt;/<br/>
-      &nbsp;&nbsp;&lt;parent-uuid&gt;/<br/>
-      &nbsp;&nbsp;&nbsp;&nbsp;subagents/<br/>
-      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;agent-*.jsonl
-    </div>
-  </div>
-</div>
-
-## Multi-session JSONLs
-
-A single on-disk JSONL can carry multiple sessionIds when Claude's
-<code>/compact</code> writes a continuation under a new session UUID
-but appends to the same file. portaconv surfaces each distinct
-sessionId as its own <code>SessionMeta</code>, matching Claude's
-own <code>/resume</code> mental model where the sessionId — not the
-file — is the identity.
-
-<Aside type="caution" title="Tool-call state doesn't survive paste">
-The renderer preserves the tool-call intent (name + args) and the result body, but the paste lands in a fresh agent process with no running tools and no live file state. Re-runs happen against the current filesystem. For most recovery scenarios this is fine — the substantive reasoning is what carries over.
-</Aside>
-
-## Read-only, on-demand
-
-portaconv never writes to any tool's storage. There is no daemon,
-no file watcher, no auto-sync. Every <code>pconv</code> invocation
-reads the current state of disk and emits output. Simpler to reason
-about, trivially reversible, composes with pipes.

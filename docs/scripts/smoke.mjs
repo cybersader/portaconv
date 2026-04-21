@@ -31,8 +31,9 @@ const isWindows = process.platform === "win32";
 // Each check: { path, mustContain }. mustContain is a substring asserted
 // against the response body — keeps the test honest beyond a 200.
 const CHECKS = [
-  { path: `${PREFIX}/`, mustContain: "portaconv" },
+  { path: `${PREFIX}/`, mustContain: "Three commands" },
   { path: `${PREFIX}/getting-started/installation/`, mustContain: "cargo install" },
+  { path: `${PREFIX}/getting-started/quickstart/`, mustContain: "pconv list" },
   { path: `${PREFIX}/concepts/`, mustContain: "Adapter" },
   { path: `${PREFIX}/concepts/agents-and-portagenty/`, mustContain: "MCP" },
   { path: `${PREFIX}/reference/commands/`, mustContain: "pconv dump" },
