@@ -38,6 +38,7 @@ const CHECKS = [
   { path: `${PREFIX}/concepts/agents-and-portagenty/`, mustContain: "MCP" },
   { path: `${PREFIX}/reference/commands/`, mustContain: "pconv dump" },
   { path: `${PREFIX}/reference/adapter-claude-code/`, mustContain: "Record type" },
+  { path: `${PREFIX}/project/roadmap/`, mustContain: "Likely next" },
   { path: `${PREFIX}/pagefind/pagefind.js`, mustContain: "" }, // 200 is enough
   { path: `${PREFIX}/sitemap-index.xml`, mustContain: "<sitemap>" },
 ];
