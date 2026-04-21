@@ -14,9 +14,11 @@ Sibling to [portagenty](https://github.com/cybersader/portagenty).
 
 ---
 
-> **Status: v0.0.1 bootstrap.** Nothing works yet. The scaffolding
-> is in place; Phase 1 (JSONL research + adapter trait) starts next.
-> See `knowledgebase/` for the design context.
+> **Status: v0.1 surface feature-complete; not yet on crates.io.**
+> Claude Code adapter, `list` / `dump` / `mcp serve`, path-rewrite
+> transforms, per-file list cache, and explicit backing-file override
+> all shipped. Full guide at
+> [cybersader.github.io/portaconv](https://cybersader.github.io/portaconv/).
 
 ## The problem
 
@@ -70,7 +72,33 @@ survives contact with reality.
 cargo install --git https://github.com/cybersader/portaconv
 ```
 
-(Published to crates.io once v0.1 lands.)
+(Published to crates.io once v0.1 stabilizes.)
+
+## Usage with Claude Code
+
+The canonical wiring is via [portagenty](https://github.com/cybersader/portagenty):
+
+```sh
+pa init --with-agent-hooks   # scaffolds .mcp.json + .claude/ in your project
+```
+
+That writes an `.mcp.json` pointing at `pconv mcp serve`. Prefer to
+hand-roll? Same shape works in `~/.claude.json` or a project-level
+`.mcp.json`:
+
+```jsonc
+{
+  "mcpServers": {
+    "portaconv": { "command": "pconv", "args": ["mcp", "serve"] }
+  }
+}
+```
+
+Once wired, the agent gets `list_conversations` + `get_conversation`
+tools and a `convos://conversation/{id}` resource template. See the
+[agents + portagenty guide](https://cybersader.github.io/portaconv/concepts/agents-and-portagenty/)
+for usage patterns (post-compact recovery, cross-tool handoff,
+committed recovery artifacts).
 
 ## The unique value
 
