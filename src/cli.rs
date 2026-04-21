@@ -283,44 +283,78 @@ fn find_workspace_toml_upwards() -> Result<Option<std::path::PathBuf>> {
 }
 
 fn parse_workspace_toml(path: &std::path::Path) -> Result<WorkspaceScope> {
-    // Minimal parse — we only care about the `projects` array. Using
-    // serde_json's feature-equivalent here would require a full toml
-    // dep; a regex-light line scan is fine for the v0.1 contract.
+    // Minimal parse — we only care about two arrays:
+    //   projects       : authoritative workspace project paths
+    //   previous_paths : historical paths the workspace lived at before
+    //                    (appended by portagenty when it re-registers a
+    //                    moved folder). Bridges sessions tied to the
+    //                    old on-disk encoded-dir key in
+    //                    `~/.claude/projects/` without requiring any
+    //                    pconv-side state.
+    //
+    // A full toml dep for two array reads is overkill — line-scan it.
     let body = std::fs::read_to_string(path)
         .with_context(|| format!("read workspace toml {}", path.display()))?;
     let base = path
         .parent()
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let mut scope = WorkspaceScope::default();
-    // Projects default to the TOML file's own directory if no
-    // `projects = [...]` line is declared — same convention portagenty
-    // uses for a workspace with no explicit project list.
-    scope.project_paths.push(base.clone());
+
+    let mut declared_projects: Option<Vec<std::path::PathBuf>> = None;
+    let mut previous: Vec<std::path::PathBuf> = Vec::new();
+
     for line in body.lines() {
         let line = line.trim();
-        let Some(rest) = line.strip_prefix("projects") else {
-            continue;
-        };
-        let Some(rhs) = rest.trim_start().strip_prefix('=') else {
-            continue;
-        };
-        let rhs = rhs.trim();
-        let Some(inner) = rhs.strip_prefix('[').and_then(|s| s.strip_suffix(']')) else {
-            continue;
-        };
-        scope.project_paths.clear();
-        for item in inner.split(',') {
-            let item = item.trim().trim_matches(|c: char| c == '"' || c == '\'');
-            if item.is_empty() {
-                continue;
+        if let Some(rest) = line.strip_prefix("previous_paths") {
+            if let Some(items) = extract_toml_string_array(rest) {
+                for item in items {
+                    previous.push(expand_path(&item, &base));
+                }
             }
-            let expanded = expand_path(item, &base);
-            scope.project_paths.push(expanded);
+            continue;
         }
-        break;
+        if let Some(rest) = line.strip_prefix("projects") {
+            if let Some(items) = extract_toml_string_array(rest) {
+                declared_projects = Some(items.iter().map(|s| expand_path(s, &base)).collect());
+            }
+            continue;
+        }
     }
+
+    // `projects` wins authoritatively when declared; otherwise fall back
+    // to the TOML's own directory (matches portagenty's convention).
+    // `previous_paths` is purely additive — always appended — so moved
+    // workspaces can reach their pre-move sessions without any
+    // portagenty-side state lookup.
+    let mut scope = WorkspaceScope::default();
+    match declared_projects {
+        Some(ps) => scope.project_paths.extend(ps),
+        None => scope.project_paths.push(base.clone()),
+    }
+    scope.project_paths.extend(previous);
     Ok(scope)
+}
+
+/// Parse the RHS of a `key = [ "a", "b", … ]` assignment from a single
+/// TOML line. Tolerates trailing comments and inline whitespace.
+/// Returns `None` if the line isn't in the expected shape.
+fn extract_toml_string_array(rest: &str) -> Option<Vec<String>> {
+    let rhs = rest.trim_start().strip_prefix('=')?.trim();
+    // Strip an inline `# comment` tail if present; safe because TOML
+    // strings can't contain unescaped `#`-with-leading-space without
+    // being quoted, and we only match quoted items below.
+    let rhs = rhs.split_once(" #").map(|(a, _)| a).unwrap_or(rhs).trim();
+    let inner = rhs.strip_prefix('[').and_then(|s| s.strip_suffix(']'))?;
+    let items: Vec<String> = inner
+        .split(',')
+        .map(|s| {
+            s.trim()
+                .trim_matches(|c: char| c == '"' || c == '\'')
+                .to_string()
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+    Some(items)
 }
 
 fn expand_path(input: &str, base: &std::path::Path) -> std::path::PathBuf {

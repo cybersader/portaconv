@@ -176,6 +176,27 @@ Same flag works via MCP as the `workspace_toml` argument on
 `list_conversations`. When `projects` is missing from the TOML,
 the scope defaults to the TOML's own directory.
 
+### Surviving folder moves — `previous_paths`
+
+If a workspace has been moved (portagenty's auto-re-register-on-walk-up
+fires when it detects the TOML's `id` at a new path), old Claude Code
+sessions are keyed under the **old** cwd. To bridge them without any
+out-of-band state:
+
+```toml
+# Appended by portagenty when it re-registers a moved workspace;
+# read by portaconv as additive scope entries.
+previous_paths = ["/home/alice/code/myproj"]
+```
+
+portaconv reads this array alongside `projects` and unions both into
+the workspace scope. Sessions authored at the old path surface in
+`list` / `dump` the same way current-path sessions do. No `id`-lookup
+coupling; everything lives in the committable TOML.
+
+_Currently portaconv reads `previous_paths`; portagenty's auto-append
+behavior is tracked as a separate upstream PR._
+
 <Aside type="note" title="Why workspace scoping matters for agents">
 An agent running inside workspace A should see A's sessions, not every conversation on the machine. Without scoping, a <code>list_conversations</code> call returns the full corpus (~hundreds for a long-time user), blowing the context budget. Workspace-scoped listing keeps the agent focused.
 </Aside>

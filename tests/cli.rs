@@ -17,6 +17,13 @@ fn fixture_root() -> PathBuf {
     p
 }
 
+fn workspace_fixture(name: &str) -> PathBuf {
+    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    p.push("tests/fixtures/workspaces");
+    p.push(name);
+    p
+}
+
 #[test]
 fn list_shows_only_main_session() {
     let out = Command::cargo_bin("pconv")
@@ -33,15 +40,22 @@ fn list_shows_only_main_session() {
     let sessions: serde_json::Value = serde_json::from_str(&out).unwrap();
     let arr = sessions.as_array().unwrap();
 
-    // Only the main session should surface — subagent + old-agent files
-    // are filtered by the adapter per docs §4.
-    assert_eq!(arr.len(), 1, "expected 1 session, got: {out}");
-    let s = &arr[0];
-    assert_eq!(s["id"], "aaaaaaaa-bbbb-cccc-dddd-000000000001");
-    assert_eq!(s["tool"], "claude-code");
-    assert_eq!(s["message_count"], 4);
-    assert_eq!(s["cwd"], "/test/workspace/sample");
-    assert_eq!(s["title"], "Hello world — please read README.md");
+    // Two real sessions in the fixture corpus (main + pre-move).
+    // Subagent + old-agent files are filtered by the adapter per
+    // docs §4 and must NOT appear — the length check pins that.
+    assert_eq!(
+        arr.len(),
+        2,
+        "expected 2 sessions (main + pre-move), got: {out}"
+    );
+    let main = arr
+        .iter()
+        .find(|s| s["id"] == "aaaaaaaa-bbbb-cccc-dddd-000000000001")
+        .expect("main session missing");
+    assert_eq!(main["tool"], "claude-code");
+    assert_eq!(main["message_count"], 4);
+    assert_eq!(main["cwd"], "/test/workspace/sample");
+    assert_eq!(main["title"], "Hello world — please read README.md");
 }
 
 #[test]
@@ -54,7 +68,7 @@ fn list_table_format_lists_one_row() {
         .success()
         .stdout(contains("aaaaaaaa-bbbb-cccc-dddd-000000000001"))
         .stdout(contains("Hello world"))
-        .stdout(contains("1 session(s)"));
+        .stdout(contains("2 session(s)"));
 }
 
 #[test]
@@ -309,6 +323,44 @@ fn dump_tail_slices_and_records_truncation() {
         .assert()
         .success()
         .stdout(contains("truncated: last 2 of 4 messages"));
+}
+
+#[test]
+fn list_includes_sessions_from_previous_paths() {
+    // A workspace that has moved: the TOML's `projects` points at the
+    // new location, `previous_paths` carries the pre-move one. Sessions
+    // authored at either path must both surface under one list call.
+    let toml = workspace_fixture("with-previous-paths.portagenty.toml");
+    let out = Command::cargo_bin("pconv")
+        .unwrap()
+        .env("PORTACONV_CLAUDE_ROOT", fixture_root())
+        .args([
+            "list",
+            "--workspace-toml",
+            toml.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let sessions: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    let arr = sessions.as_array().unwrap();
+
+    // Two sessions: the main fixture (at /test/workspace/sample) and the
+    // pre-move one (at /test/workspace/sample-before-move). Without
+    // previous_paths plumbing, only the first would show up.
+    let ids: Vec<&str> = arr.iter().map(|s| s["id"].as_str().unwrap()).collect();
+    assert!(
+        ids.contains(&"aaaaaaaa-bbbb-cccc-dddd-000000000001"),
+        "missing current-path session; got: {ids:?}"
+    );
+    assert!(
+        ids.contains(&"bbbbbbbb-cccc-dddd-eeee-222222222222"),
+        "missing previous_paths-bridged session; got: {ids:?}"
+    );
 }
 
 #[test]

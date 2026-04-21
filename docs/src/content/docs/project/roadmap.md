@@ -71,20 +71,27 @@ receiving-side contract (what flags pconv accepts, what output
 format it emits) is settled and documented here; the consumer is
 upstream.
 
+- **`pa init --with-agent-hooks`** scaffolds a workspace with pconv
+  pre-wired: `.mcp.json` (portaconv MCP entry), `.claude/commands/*.md`
+  (slash commands like `/pull-context` that call pconv), and
+  `.claude/skills/*.md` (capability manifest so the agent
+  self-discovers what's available). Optional flag; skipped if
+  pconv isn't on PATH. The in-session friction killer — agent
+  inside a pa-launched session reaches its own workspace history
+  without copy-paste or leaving the terminal.
 - **`pa convos` shim.** Small wrapper that shells out to `pconv`
   with workspace context pre-filled. `pa convos list` →
   `pconv list --workspace-toml <current>`. `pa convos last` →
   `pconv dump --latest --workspace-toml <current>`. If pconv isn't
   installed, print an install hint and exit. ~100 LOC + an install
   check.
-- **Folder-move recovery hint.** pa's auto-re-register-on-walk-up
-  already detects when a workspace file shows up at a new path.
-  When it does, emit a status line: "heads up — old-path
-  conversations may still exist; run `pconv list --workspace-id
-  <uuid>` to see them." Would need portaconv to accept
-  `--workspace-id <uuid>` and resolve it against portagenty's
-  workspace registry — meaningful coupling, defer unless someone
-  actually hits the scenario.
+- **Auto-maintain `previous_paths`** in the workspace TOML. When
+  pa's auto-re-register-on-walk-up detects that a workspace `id`
+  has shown up at a new path, append the old cwd to the TOML's
+  `previous_paths` array. portaconv **already reads** this field,
+  so the bridging works the moment pa starts writing it — no
+  portaconv version bump needed. Keeps the entire story inside
+  the committable TOML; no cross-tool registry coupling.
 - **`pa://convos/<workspace-id>`** protocol-handler route. pa
   already registers a `pa://` URL scheme for cross-device deep
   links; this slot would resolve to `pconv list` filtered to that
@@ -128,6 +135,9 @@ For context — the following are done and live:
 - Full MCP schema parity (every CLI flag mirrored as a tool argument)
 - Per-file list cache (~13× speedup on 2607-JSONL corpus)
 - v0.2 issues #1 #2 #3 all closed
+- Defensive `previous_paths` read — portaconv bridges old-path
+  sessions the moment portagenty starts writing the field; no
+  portaconv version bump required when that lands upstream
 
 If something here looks like it should be on a different tier,
 open an [issue](https://github.com/cybersader/portaconv/issues) and

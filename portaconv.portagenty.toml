@@ -13,7 +13,7 @@ kind = "shell"
 [[session]]
 name = "claude"
 cwd = "."
-command = "claude"
+command = "claude --continue --dangerously-skip-permissions"
 kind = "claude-code"
 
 [[session]]

@@ -25,6 +25,10 @@ pconv list --workspace-toml auto            # scope to current portagenty worksp
 pconv list --show-duplicates                # keep WSL- + Windows-encoded copies
 ```
 
+`--workspace-toml` reads both `projects` and `previous_paths` from the
+TOML; the latter is how a moved workspace keeps surfacing sessions from
+its pre-move cwd without any out-of-band state.
+
 ### Filtering, sorting, limiting
 
 ```sh

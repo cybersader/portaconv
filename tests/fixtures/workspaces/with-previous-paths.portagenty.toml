@@ -1,0 +1,11 @@
+# Fixture workspace TOML exercising the `previous_paths` bridging
+# field. Portagenty will append to this array when it auto-re-registers
+# a workspace that moved folders; portaconv reads it on scope resolution
+# so sessions authored at the old path still show up in `list` / dump.
+name = "fixture"
+id = "dddddddd-eeee-ffff-0000-111111111111"
+
+projects = ["/test/workspace/sample"]
+
+# Old locations — appended over time by portagenty's re-register hook
+previous_paths = ["/test/workspace/sample-before-move"]

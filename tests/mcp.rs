@@ -81,8 +81,13 @@ fn list_conversations_returns_fixture_session() {
     })]);
     let text = resps[0]["result"]["content"][0]["text"].as_str().unwrap();
     let metas: Value = serde_json::from_str(text).unwrap();
-    assert_eq!(metas.as_array().unwrap().len(), 1);
-    assert_eq!(metas[0]["id"], "aaaaaaaa-bbbb-cccc-dddd-000000000001");
+    let arr = metas.as_array().unwrap();
+    // Fixture corpus has 2 sessions (main + pre-move); pin that both
+    // surface, and that the main one is present.
+    assert_eq!(arr.len(), 2);
+    assert!(arr
+        .iter()
+        .any(|s| s["id"] == "aaaaaaaa-bbbb-cccc-dddd-000000000001"));
 }
 
 #[test]
