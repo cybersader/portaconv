@@ -162,6 +162,109 @@ fn notification_produces_no_response() {
 }
 
 #[test]
+fn list_conversations_honors_grep_and_limit() {
+    // Hit: "hello" matches the fixture title.
+    let resps = roundtrip(&[json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {
+            "name": "list_conversations",
+            "arguments": { "grep": "hello", "limit": 10 }
+        }
+    })]);
+    let text = resps[0]["result"]["content"][0]["text"].as_str().unwrap();
+    let metas: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(metas.as_array().unwrap().len(), 1);
+
+    // Miss: no title or cwd contains this.
+    let resps = roundtrip(&[json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {
+            "name": "list_conversations",
+            "arguments": { "grep": "nonexistent_needle_xyz" }
+        }
+    })]);
+    let text = resps[0]["result"]["content"][0]["text"].as_str().unwrap();
+    let metas: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(metas.as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn list_conversations_rejects_bad_since() {
+    let resps = roundtrip(&[json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {
+            "name": "list_conversations",
+            "arguments": { "since": "banana" }
+        }
+    })]);
+    assert_eq!(resps[0]["error"]["code"], -32602);
+}
+
+#[test]
+fn get_conversation_latest_resolves_fixture() {
+    let resps = roundtrip(&[json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {
+            "name": "get_conversation",
+            "arguments": { "latest": true, "format": "json" }
+        }
+    })]);
+    let text = resps[0]["result"]["content"][0]["text"].as_str().unwrap();
+    let conv: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(conv["id"], "aaaaaaaa-bbbb-cccc-dddd-000000000001");
+}
+
+#[test]
+fn get_conversation_id_and_latest_mutually_exclusive() {
+    let resps = roundtrip(&[json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {
+            "name": "get_conversation",
+            "arguments": {
+                "id": "aaaaaaaa-bbbb-cccc-dddd-000000000001",
+                "latest": true
+            }
+        }
+    })]);
+    assert_eq!(resps[0]["error"]["code"], -32602);
+    assert!(resps[0]["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("mutually exclusive"));
+}
+
+#[test]
+fn get_conversation_tail_slices_via_mcp() {
+    let resps = roundtrip(&[json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {
+            "name": "get_conversation",
+            "arguments": {
+                "id": "aaaaaaaa-bbbb-cccc-dddd-000000000001",
+                "format": "json",
+                "tail": 2
+            }
+        }
+    })]);
+    let text = resps[0]["result"]["content"][0]["text"].as_str().unwrap();
+    let conv: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(conv["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(conv["extensions"]["truncated"]["dropped"], 2);
+}
+
+#[test]
+fn get_conversation_missing_id_and_no_latest_errors() {
+    let resps = roundtrip(&[json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {
+            "name": "get_conversation",
+            "arguments": {}
+        }
+    })]);
+    assert_eq!(resps[0]["error"]["code"], -32602);
+}
+
+#[test]
 fn rewrite_flag_honored_via_mcp() {
     // Build a conversation that contains a /mnt/c/ path, ask for
     // wsl-to-win via the MCP tool, verify conversion happened. The

@@ -9,7 +9,10 @@ use std::io::{self, Write};
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::adapters::{dedup_sessions, ClaudeCode, ConvoAdapter, WorkspaceScope};
+use crate::adapters::{
+    dedup_sessions, grep_sessions, limit_sessions, parse_since, sort_sessions, ClaudeCode,
+    ConvoAdapter, SortKey, WorkspaceScope,
+};
 use crate::render::{render_markdown, MarkdownOptions};
 use crate::transform::{apply_path_rewrite, PathRewrite};
 
@@ -62,12 +65,63 @@ pub struct ListArgs {
     /// on-disk cache path. Useful for benchmarking.
     #[arg(long)]
     pub cache_stats: bool,
+    /// Only list sessions updated after this point. Accepts a relative
+    /// duration (`2d`, `6h`, `30m`, `4w`) or an absolute date
+    /// (`2026-04-01`, `2026-04-01T12:00:00Z`).
+    #[arg(long)]
+    pub since: Option<String>,
+    /// Sort column. Defaults: updated/started/msgs descend newest-first,
+    /// title/id ascend alphabetic. Use --reverse to flip.
+    #[arg(long, value_enum, default_value_t = SortKeyFlag::Updated)]
+    pub sort: SortKeyFlag,
+    /// Flip the default sort direction for whichever column is active.
+    #[arg(long)]
+    pub reverse: bool,
+    /// Cap output at N entries after filtering and sorting. 0 = no cap.
+    #[arg(long, default_value_t = 0)]
+    pub limit: usize,
+    /// Case-insensitive substring match on title + cwd. NOT full-content
+    /// search — use this for "the react refactor one" / "anything in
+    /// /work/api". Full-content search is tracked separately.
+    #[arg(long)]
+    pub grep: Option<String>,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+pub enum SortKeyFlag {
+    Updated,
+    Started,
+    Msgs,
+    Title,
+    Id,
+}
+
+impl From<SortKeyFlag> for SortKey {
+    fn from(f: SortKeyFlag) -> Self {
+        match f {
+            SortKeyFlag::Updated => SortKey::Updated,
+            SortKeyFlag::Started => SortKey::Started,
+            SortKeyFlag::Msgs => SortKey::Msgs,
+            SortKeyFlag::Title => SortKey::Title,
+            SortKeyFlag::Id => SortKey::Id,
+        }
+    }
 }
 
 #[derive(clap::Args, Debug)]
 pub struct DumpArgs {
-    /// Session ID (UUID).
-    pub session_id: String,
+    /// Session ID (UUID). Optional when `--latest` is set.
+    pub session_id: Option<String>,
+    /// Resolve to the most recent session discoverable (after workspace
+    /// scope + dedup). Composes with `--workspace-toml` for the
+    /// "dump the most recent session in this portagenty workspace"
+    /// one-liner.
+    #[arg(long)]
+    pub latest: bool,
+    /// Scope latest-session lookup by a portagenty workspace TOML.
+    /// Accepts an explicit path or `auto` to walk up from cwd.
+    #[arg(long)]
+    pub workspace_toml: Option<String>,
     /// Output format.
     #[arg(long, value_enum, default_value_t = DumpFormat::Markdown)]
     pub format: DumpFormat,
@@ -85,6 +139,12 @@ pub struct DumpArgs {
     /// `cwd` metadata alone.
     #[arg(long, value_enum)]
     pub rewrite: Option<PathRewriteFlag>,
+    /// Keep only the last N messages. The output records how many
+    /// earlier messages were dropped (markdown header + extensions.truncated
+    /// in JSON). Pair with `--include-thinking` / `--full-results` to
+    /// trade off depth vs length.
+    #[arg(long)]
+    pub tail: Option<usize>,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -132,6 +192,56 @@ pub enum DumpFormat {
 /// TOML-parse logic so the two surfaces behave identically.
 pub fn build_workspace_scope_public(flag: Option<&str>) -> Result<WorkspaceScope> {
     build_workspace_scope(flag)
+}
+
+/// Resolve which session id `dump` should load. Either the explicit
+/// positional arg or the most-recent session in the scope when
+/// `--latest` is given. Errors if neither is usable.
+fn resolve_dump_target(adapter: &ClaudeCode, args: &DumpArgs) -> Result<String> {
+    if let Some(id) = args.session_id.as_deref() {
+        if args.latest {
+            return Err(anyhow!(
+                "--latest and a positional session id are mutually exclusive — pick one"
+            ));
+        }
+        return Ok(id.to_string());
+    }
+    if !args.latest {
+        return Err(anyhow!(
+            "pconv dump: give a session id, or pass --latest (optionally with --workspace-toml auto)"
+        ));
+    }
+    let scope = build_workspace_scope(args.workspace_toml.as_deref())?;
+    let metas = adapter
+        .list(Some(&scope))
+        .context("listing sessions to resolve --latest")?;
+    let metas = dedup_sessions(metas);
+    // adapter.list already sorts updated_at desc; after dedup the
+    // first entry is the freshest surviving session.
+    let pick = metas.into_iter().next().ok_or_else(|| {
+        anyhow!(
+            "no sessions found{}",
+            if args.workspace_toml.is_some() {
+                " in this workspace"
+            } else {
+                ""
+            }
+        )
+    })?;
+    Ok(pick.id)
+}
+
+/// Truncate a path-ish string to a visual width, keeping the useful
+/// tail (projects are recognizable by their last segments, not their
+/// `/home/cybersader/…` prefix).
+fn truncate_middle(s: &str, width: usize) -> String {
+    if s.chars().count() <= width {
+        return s.to_string();
+    }
+    // "…" + last (width - 1) chars.
+    let tail: String = s.chars().rev().take(width - 1).collect();
+    let tail: String = tail.chars().rev().collect();
+    format!("…{tail}")
 }
 
 /// Resolve a --workspace-toml flag into a `WorkspaceScope` with the
@@ -248,7 +358,10 @@ fn run_list(args: ListArgs) -> Result<()> {
         ));
     }
     crate::adapters::claude_code::set_no_cache(args.no_cache);
-    let scope = build_workspace_scope(args.workspace_toml.as_deref())?;
+    let mut scope = build_workspace_scope(args.workspace_toml.as_deref())?;
+    if let Some(s) = args.since.as_deref() {
+        scope.since = Some(parse_since(s)?);
+    }
     let mut sessions = adapter
         .list(Some(&scope))
         .context("listing Claude Code sessions")?;
@@ -256,6 +369,11 @@ fn run_list(args: ListArgs) -> Result<()> {
     if !args.show_duplicates {
         sessions = dedup_sessions(sessions);
     }
+    if let Some(needle) = args.grep.as_deref() {
+        sessions = grep_sessions(sessions, needle);
+    }
+    sort_sessions(&mut sessions, args.sort.into(), args.reverse);
+    sessions = limit_sessions(sessions, args.limit);
 
     let out = io::stdout();
     let mut out = out.lock();
@@ -265,23 +383,26 @@ fn run_list(args: ListArgs) -> Result<()> {
             writeln!(out)?;
         }
         ListFormat::Table => {
+            // Columns: id (36) · msgs (5) · updated (16) · cwd (40) · title
             writeln!(
                 out,
-                "{:<36}  {:>5}  {:<20}  title",
-                "session-id", "msgs", "updated"
+                "{:<36}  {:>5}  {:<16}  {:<40}  title",
+                "session-id", "msgs", "updated", "cwd"
             )?;
-            writeln!(out, "{}", "-".repeat(100))?;
+            writeln!(out, "{}", "-".repeat(130))?;
             for s in &sessions {
                 let updated = s
                     .updated_at
                     .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
                     .unwrap_or_else(|| "-".into());
+                let cwd = s.cwd.as_ref().and_then(|p| p.to_str()).unwrap_or("-");
+                let cwd_short: String = truncate_middle(cwd, 40);
                 let title = s.title.as_deref().unwrap_or("(untitled)");
-                let truncated: String = title.chars().take(60).collect();
+                let title_short: String = title.chars().take(60).collect();
                 writeln!(
                     out,
-                    "{:<36}  {:>5}  {:<20}  {}",
-                    s.id, s.message_count, updated, truncated
+                    "{:<36}  {:>5}  {:<16}  {:<40}  {}",
+                    s.id, s.message_count, updated, cwd_short, title_short
                 )?;
             }
             writeln!(out, "\n{} session(s)", sessions.len())?;
@@ -312,9 +433,13 @@ fn run_dump(args: DumpArgs) -> Result<()> {
             "Claude Code storage not found. Expected ~/.claude/projects/ (or set PORTACONV_CLAUDE_ROOT)"
         ));
     }
-    let mut conv = adapter.load(&args.session_id)?;
+    let target_id = resolve_dump_target(&adapter, &args)?;
+    let mut conv = adapter.load(&target_id)?;
     if let Some(mode) = args.rewrite {
         apply_path_rewrite(&mut conv, mode.into());
+    }
+    if let Some(n) = args.tail {
+        conv.apply_tail(n);
     }
     let out = io::stdout();
     let mut out = out.lock();

@@ -65,6 +65,22 @@ pub fn render_markdown(conv: &Conversation, opts: &MarkdownOptions) -> String {
     {
         let _ = writeln!(out, "- git branch: `{branch}`");
     }
+    // Truncation marker — present when apply_tail() slimmed the
+    // conversation before render. Paste recipients should see this
+    // explicitly so they understand the paste is a window, not the
+    // full session.
+    if let Some(t) = conv.extensions.get("truncated") {
+        let tail = t.get("tail").and_then(|v| v.as_u64()).unwrap_or(0);
+        let original = t
+            .get("original_message_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let dropped = t.get("dropped").and_then(|v| v.as_u64()).unwrap_or(0);
+        let _ = writeln!(
+            out,
+            "- truncated: last {tail} of {original} messages ({dropped} earlier dropped)"
+        );
+    }
     let _ = writeln!(out);
 
     for msg in &conv.messages {

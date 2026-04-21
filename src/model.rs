@@ -84,6 +84,37 @@ impl ContentBlock {
     }
 }
 
+impl Conversation {
+    /// Keep only the last `tail` messages. Records a `truncated` entry
+    /// in `extensions` so downstream consumers (markdown renderer, JSON
+    /// readers) can surface that the paste is a slice, not the whole
+    /// thing. A `tail` of `0` is a no-op. If the session already has
+    /// ≤ `tail` messages the whole conversation is preserved untouched.
+    pub fn apply_tail(&mut self, tail: usize) {
+        if tail == 0 || self.messages.len() <= tail {
+            return;
+        }
+        let original = self.messages.len();
+        let dropped = original - tail;
+        self.messages = self.messages.split_off(dropped);
+
+        let mut ext_map = self
+            .extensions
+            .as_object()
+            .cloned()
+            .unwrap_or_else(serde_json::Map::new);
+        ext_map.insert(
+            "truncated".into(),
+            serde_json::json!({
+                "tail": tail,
+                "original_message_count": original,
+                "dropped": dropped,
+            }),
+        );
+        self.extensions = Value::Object(ext_map);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
