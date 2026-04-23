@@ -18,19 +18,25 @@ import { Card, CardGrid, Aside } from "@astrojs/starlight/components";
 
 ## Here's what you do
 
-Three commands. That's the whole tool.
+Four commands. That's the whole tool.
 
 ```sh
 pconv list                          # see your recent sessions
 pconv dump <session-id>             # render one as paste-ready markdown
 pconv dump <session-id> | clip.exe  # WSL — copy to clipboard
 # (use pbcopy on macOS, wl-copy on Wayland)
+
+pconv doctor                        # detect stale sessions-index.json
+pconv rebuild-index --all           # repair the /resume picker
 ```
 
 Paste into a new Claude Code session, claude.ai, opencode, whatever
 — the conversation keeps going. If the session was authored on a
 different OS, add `--rewrite wsl-to-win` (or `win-to-wsl`) so paths
-inside the content get translated on the way out.
+inside the content get translated on the way out. When the native
+`/resume` picker shows wrong sessions, `pconv rebuild-index` fixes
+the underlying index (upstream
+[#25032](https://github.com/anthropics/claude-code/issues/25032)).
 
 **Even faster, inside a portagenty workspace:**
 
@@ -72,7 +78,13 @@ walks through install → first dump → MCP wiring end-to-end.
   <a href="/portaconv/concepts/agents-and-portagenty/" style="text-decoration: none; color: inherit;">
     <div style="border: 2px solid var(--sl-color-accent); border-radius: 10px; padding: 1rem; background: var(--sl-color-accent-low); height: 100%;">
       <div style="font-weight: 700; margin-bottom: 0.4rem;">Agent needs past context</div>
-      <div style="font-size: 0.85rem; opacity: 0.85;">"I'm writing an agent that should automatically pull in yesterday's work." Wire MCP into its config; it calls <code>list_conversations</code> and <code>get_conversation</code> directly.</div>
+      <div style="font-size: 0.85rem; opacity: 0.85;">"I'm writing an agent that should automatically pull in yesterday's work." Wire MCP into its config; it calls <code>list_conversations</code>, <code>get_conversation</code>, or <code>doctor</code> directly.</div>
+    </div>
+  </a>
+  <a href="/portaconv/reference/commands/#pconv-doctor" style="text-decoration: none; color: inherit;">
+    <div style="border: 2px solid var(--sl-color-accent); border-radius: 10px; padding: 1rem; background: var(--sl-color-accent-low); height: 100%;">
+      <div style="font-weight: 700; margin-bottom: 0.4rem;"><code>/resume</code> is lying to me</div>
+      <div style="font-size: 0.85rem; opacity: 0.85;">"The picker shows months-old sessions for a project I was in yesterday." <code>pconv doctor</code> diagnoses stale <code>sessions-index.json</code>; <code>pconv rebuild-index</code> repairs it (upstream <a href="https://github.com/anthropics/claude-code/issues/25032">#25032</a>).</div>
     </div>
   </a>
 </div>
@@ -92,11 +104,23 @@ walks through install → first dump → MCP wiring end-to-end.
     messages. `--rewrite wsl-to-win|win-to-wsl|strip` translates
     paths. Default output: paste-ready markdown.
   </Card>
+  <Card title="pconv doctor" icon="warning">
+    Detect stale `sessions-index.json` under `~/.claude/projects/`.
+    `--dump-stale` emits paste-ready markdown for the newest
+    session in each stale project so you can recover into a fresh
+    `claude` without waiting on the picker.
+  </Card>
+  <Card title="pconv rebuild-index" icon="approve-check">
+    Rewrite `sessions-index.json` from the actual `.jsonl`s so the
+    native `/resume` picker works correctly. Atomic write, dated
+    `.bak-YYYY-MM-DD` backup. `--all --lag-threshold-hours 168`
+    for weekly cron.
+  </Card>
   <Card title="pconv mcp serve" icon="seti:config">
-    Stdio MCP server. `list_conversations` + `get_conversation`
-    tools with typed schemas (every CLI flag mirrored), plus each
-    conversation as a `convos://conversation/&lt;id&gt;` resource.
-    [See wiring guide](/portaconv/concepts/agents-and-portagenty/).
+    Stdio MCP server. `list_conversations`, `get_conversation`,
+    and `doctor` tools with typed schemas (every CLI flag mirrored),
+    plus each conversation as a `convos://conversation/&lt;id&gt;`
+    resource. [See wiring guide](/portaconv/concepts/agents-and-portagenty/).
   </Card>
 </CardGrid>
 
@@ -268,10 +292,14 @@ walks through install → first dump → MCP wiring end-to-end.
 
 ## What you can rely on
 
-Read-only. No daemon. No file watching. `pconv` never writes to
-Claude's storage — close the process and nothing's running. Every
-feature has explicit reliability tiers: what's always the same, what's
-opt-in, what could drift as Claude evolves. See the
+No daemon. No file watching. `pconv` never touches `.jsonl`
+conversation content — the substrate of your Claude history is
+never at risk. The only file `pconv` writes to is
+`sessions-index.json` (via `rebuild-index`), atomically with a
+dated `.bak-YYYY-MM-DD` backup by default. Close the process and
+nothing's running. Every feature has explicit reliability tiers:
+what's always the same, what's opt-in, what could drift as Claude
+evolves. See the
 [reliability tiers table](/portaconv/concepts/#reliability-tiers)
 for the full breakdown — it's the first thing to read if you're
 scripting against portaconv.
@@ -290,11 +318,14 @@ independently:
 
 ## Status
 
-**v0.0.1 feature-complete for v0.1.** Core model, Claude Code
-adapter, markdown renderer, path-rewrite transforms, stdio MCP
-server, portagenty workspace scoping, and per-file list cache all
-landed. See the
-[agents + portagenty page](/portaconv/concepts/agents-and-portagenty/)
-for wiring it into Claude Code / opencode, and the
+**v0.1.0 shipped.** Core model, Claude Code adapter, markdown
+renderer, path-rewrite transforms, stdio MCP server, portagenty
+workspace scoping, per-file list cache, and (new in 0.1.0)
+`sessions-index.json` diagnostics + rebuild all landed. 84 tests
+pass across unit / CLI integration / MCP suites.
+
+See the [agents + portagenty page](/portaconv/concepts/agents-and-portagenty/)
+for wiring it into Claude Code / opencode, the
 [Claude Code adapter notes](/portaconv/reference/adapter-claude-code/)
-for the v0.1 record-type contract.
+for the record-type contract, and [Commands](/portaconv/reference/commands/)
+for the full flag surface.

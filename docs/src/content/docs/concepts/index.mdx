@@ -14,15 +14,31 @@ have after the tool starts returning data.
 
 ## What you can rely on
 
-Before anything else: **portaconv never writes to any tool's
-storage.** Not a byte. There is no daemon, no file watcher, no
-auto-sync. Every `pconv` invocation reads the current state of
-disk and emits output to stdout. Close the process and nothing's
-running.
+Before anything else: **portaconv never touches the `.jsonl`
+conversation content.** Those append-only files — the substrate of
+your Claude history — are read-only to `pconv`. There is no daemon,
+no file watcher, no auto-sync. `list`, `dump`, `doctor`, and the MCP
+server all read the current state of disk and emit output to stdout.
+Close the process and nothing's running.
 
-If you ever wonder "is this going to corrupt my Claude state?",
-the answer is no, by construction. The worst portaconv can do is
-crash or print garbage to your terminal.
+The one deliberate write path is `pconv rebuild-index`, which
+rewrites `sessions-index.json` — Claude Code's picker-metadata file,
+not conversation content. That write is atomic (tempfile + rename)
+and keeps a dated `.bak-YYYY-MM-DD` backup by default, so a
+regrettable rebuild is always recoverable. The `.jsonl`s stay
+untouched; the worst `rebuild-index` can do is put an outdated
+summary in your picker, which is exactly what the tool was made to
+fix in the first place.
+
+`rebuild-index` is intentionally **not exposed via MCP** — write ops
+through agent-callable tools risk unintended fan-out. Keep rebuilds
+as explicit human CLI invocations.
+
+If you ever wonder "is this going to corrupt my Claude
+conversations?", the answer is no, by construction. The worst
+portaconv can do is crash or print garbage to your terminal, or
+write a slightly-wrong `sessions-index.json` (with a backup
+alongside it).
 
 That's the foundational invariant. The rest of the system is
 layered on top with explicit reliability tiers — worth knowing

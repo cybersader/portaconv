@@ -146,6 +146,36 @@ The output is self-documenting about what got dropped:
 
 Stacks cleanly with the rewrite and thinking/results flags.
 
+## When `/resume` shows the wrong sessions
+
+If Claude Code's own picker is lying — wrong summaries, missing your
+active session, showing months-old entries for projects you were in
+yesterday — that's usually a stale `sessions-index.json` (upstream
+[#25032](https://github.com/anthropics/claude-code/issues/25032)).
+`pconv doctor` diagnoses; `pconv rebuild-index` repairs.
+
+```sh
+# What's stale on this machine?
+pconv doctor
+
+# Fix the project I'm currently in
+pconv rebuild-index --project ~/.claude/projects/-mnt-c-Users-…-your-project
+
+# Fix every project whose index is >24h behind its jsonls
+pconv rebuild-index --all --lag-threshold-hours 24
+
+# Don't want to wait on a picker rebuild? Dump the stale session as
+# paste-ready markdown and continue in a fresh claude session.
+pconv doctor --dump-stale
+```
+
+Rebuild writes atomically (tempfile + rename) with a dated
+`.bak-YYYY-MM-DD` backup by default. The only file touched is
+`sessions-index.json` — your `.jsonl` session content is never
+modified. See [Commands → `pconv doctor`](/portaconv/reference/commands/#pconv-doctor)
+and [`pconv rebuild-index`](/portaconv/reference/commands/#pconv-rebuild-index)
+for the full flag surface.
+
 ## Let an agent do it for you (MCP)
 
 Instead of shelling out, let an MCP-capable agent call portaconv
@@ -162,9 +192,10 @@ directly. Add this to your agent's MCP config (e.g. `~/.claude/mcp.json`):
 }
 ```
 
-The agent now has two tools: `list_conversations` and
-`get_conversation`. It can pull in prior context on its own, no
-copy-paste needed. Full details on the
+The agent now has three tools: `list_conversations`,
+`get_conversation`, and `doctor` (for self-healing when it notices
+the picker disagrees with reality). It can pull in prior context on
+its own, no copy-paste needed. Full details on the
 [agents + portagenty page](/portaconv/concepts/agents-and-portagenty/).
 
 ## What's next

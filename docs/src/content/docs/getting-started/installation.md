@@ -6,13 +6,15 @@ sidebar:
 ---
 
 :::note
-**v0.0.1.** All three commands are implemented — `list`, `dump`
-(markdown + json, path rewriting, thinking/result flags), and
-`mcp serve` (stdio MCP for agent integration). Install from source
+**v0.1.0.** Five commands shipped — `list`, `dump` (markdown + json,
+path rewriting, thinking/result flags), `doctor` (stale
+`sessions-index.json` diagnosis), `rebuild-index` (atomic repair),
+and `mcp serve` (stdio MCP with `list_conversations` +
+`get_conversation` + `doctor` tools). Install from the git repo
 until the crate is published to crates.io.
 :::
 
-## From crates.io (planned, v0.1+)
+## From crates.io (planned)
 
 ```sh
 cargo install portaconv
@@ -33,7 +35,7 @@ cargo install --path .
 ## Verify it works
 
 ```sh
-# Version check
+# Version check (should report 0.1.0 or later)
 pconv --version
 
 # Does pconv see your Claude Code storage?
@@ -41,6 +43,10 @@ pconv list --format json | jq 'length'
 
 # Peek at the shape of one session entry (needs jq)
 pconv list --format json | jq '.[0]'
+
+# Quick health check on your ~/.claude/projects/ tree —
+# reports stale sessions-index.json files, read-only
+pconv doctor
 ```
 
 If `list` returns `0` but you've used Claude Code, you may be

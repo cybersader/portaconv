@@ -9,6 +9,13 @@ format, and emits paste-ready output — optionally with OS-path
 rewriting so WSL-authored content can resume on Windows and
 vice versa.
 
+Since v0.1.0, also **diagnoses and repairs stale
+`sessions-index.json`** files — the metadata file Claude Code's
+`/resume` picker reads, which goes stale on ungraceful shutdowns
+(upstream [#25032](https://github.com/anthropics/claude-code/issues/25032)).
+Repair sits naturally alongside extract because the jsonl walker
+is already there.
+
 Sibling project to [portagenty](https://github.com/cybersader/portagenty)
 (workspace launcher) and
 [mcp-workflow-and-tech-stack](https://github.com/cybersader/mcp-workflow-and-tech-stack)
@@ -27,20 +34,24 @@ Sibling project to [portagenty](https://github.com/cybersader/portagenty)
    that drove the pivot from sync/bridge to extract/paste.
 4. **`knowledgebase/02-agent-research.md`** — competitive landscape
    + schema recommendations from parallel Explore agents.
+5. **`docs/src/content/docs/reference/commands.md`** — the
+   current CLI surface as documented to users. Keep in sync
+   with `src/cli.rs`.
 
 ## Current stage
 
-**v0.0.1 bootstrap.** Repo exists, Cargo skeleton compiles,
-workspace TOML is registered with portagenty. **No commands
-implemented yet.** Next task: Phase 1 research spike on Claude
-Code JSONLs.
+**v0.1.0 — four commands live.** Core model, Claude Code adapter,
+markdown renderer, path-rewrite transforms, stdio MCP server, and
+sessions-index diagnostics + rebuild all shipped. 84 tests pass
+(29 unit / 37 CLI integration / 18 MCP).
 
 ## Hard constraints (locked)
 
 These came out of the design Q&A. Don't reopen without user OK.
 
 - **Standalone binary.** `pconv` installs via `cargo install
-  portaconv`. Not a pa subcommand.
+  --git https://github.com/cybersader/portaconv`. Not a pa
+  subcommand.
 - **CLI-first, terminal-native.** No GUI, no TUI viewer. Unix-pipe
   semantics.
 - **OpenAI Chat Completions** as the canonical schema, with
@@ -49,9 +60,16 @@ These came out of the design Q&A. Don't reopen without user OK.
   fields.
 - **Adapter trait per tool.** One small trait; each tool normalizes
   its format to the shared `Conversation` model.
-- **Claude Code adapter only in v0.1.** OpenCode / Cursor / Aider
-  / continue.dev = separate follow-up PRs.
-- **Read-only.** portaconv never writes to any tool's storage.
+- **Claude Code adapter only through v0.1.** OpenCode / Cursor /
+  Aider / continue.dev = separate follow-up PRs.
+- **Read-only by default; writes are explicit and rare.**
+  `rebuild-index` is the only writing subcommand. It writes
+  atomically (tempfile + rename) with a dated `.bak-YYYY-MM-DD`
+  backup by default. The "safe to run, can't break your Claude
+  state" contract still holds — it only touches
+  `sessions-index.json`, never the `.jsonl` session content.
+- **`rebuild-index` is CLI-only.** Not exposed via MCP in v0.1 —
+  write ops through agent-callable tools risk unintended fan-out.
 - **No daemon, no file watching, no auto-sync.** On-demand reads.
 - **No path-rewrite by default.** `--rewrite wsl-to-win` etc. is
   opt-in.
@@ -61,12 +79,30 @@ These came out of the design Q&A. Don't reopen without user OK.
 ```
 pconv list                     # list conversations (Claude Code)
 pconv dump <session-id>        # paste-ready markdown to stdout
+pconv doctor                   # detect stale sessions-index.json
+pconv doctor --dump-stale      # + paste-ready markdown for stale projects
+pconv rebuild-index --all      # rewrite sessions-index.json from the .jsonls
 pconv mcp serve                # stdio MCP server
 ```
 
-MCP tools: `list_conversations`, `get_conversation`. Each
-conversation also exposed as a resource at
-`convos://conversation/<id>`.
+**MCP tools exposed:** `list_conversations`, `get_conversation`,
+`doctor`. Each conversation also exposed as a resource at
+`convos://conversation/<id>`. `rebuild-index` deliberately not
+exposed via MCP.
+
+## Failure modes addressed
+
+Three distinct `/resume` failure modes; one tool covers all three:
+
+| Failure | Primitive |
+|---|---|
+| Cross-OS content poisoning (paths baked into jsonl) | `pconv dump --rewrite {wsl-to-win\|win-to-wsl}` |
+| Folder moved (portagenty workspace) | `pconv list --workspace-toml auto` (reads `previous_paths`) |
+| Stale `sessions-index.json` (ungraceful shutdown skipped the rewrite) | `pconv doctor` + `pconv rebuild-index` |
+
+The first two use the extractor; the third uses the same jsonl
+walker to repair the native index. Zero new infrastructure per
+failure mode after the jsonl walker existed.
 
 ## Portagenty awareness (future — not v0.1)
 
@@ -87,20 +123,28 @@ standalone.
   code style: `anyhow::Result`-everywhere, tight `// why` comments
   (never `// what`), no docstring sprawl.
 - Tests alongside features. Snapshot tests (via `insta`) for
-  renderer output.
-- Never commit without the user asking.
+  renderer output. `assert_fs::TempDir` + `filetime` for
+  fixture-copy-and-mutate tests (see `tests/cli.rs` for the
+  `fresh_fixture_clone()` pattern used by every rebuild test).
+- **Never commit without the user asking.** Keep `.claude/` and
+  `.mcp.json` scaffolding in the tree (they help anyone cloning
+  the repo wire up the MCP server + agent hooks).
+- **No AI attribution in commits, PRs, tags, or docs.** Never add
+  `Co-Authored-By: Claude`, "Generated by/with Claude", or any
+  equivalent for other AI tools. Enforced by global `commit-msg`
+  hook on this machine.
 - When in doubt about a design direction, surface a tradeoff
   framed in the user's stated principles: **first principles,
   resilient, elegant, future accounting**.
-
-## Where to find the plan
-
-`~/.claude/plans/piped-sauteeing-breeze.md` — the approved
-implementation plan. Read-only reference; don't edit.
 
 ## Sibling repos (don't touch from here)
 
 - `../portagenty/` — launcher. Workspace `id` field we'll use.
 - `../mcp-workflow-and-tech-stack/tools/claudecode-project-sync/`
-  — the Docker sync tool we pivoted away from. Gets a banner
-  later pointing users at pconv; don't modify it from here.
+  — the Docker sync tool we pivoted away from. Already has a
+  "superseded" banner + "Related tools" table pointing at
+  portaconv; don't modify it from here.
+- `../mcp-workflow-and-tech-stack/02-stack/patterns/claude-code-session-recovery.md`
+  — user-facing practitioner pattern with the decision tree across
+  `claude -r <uuid>` / `pconv rebuild-index` / `pconv doctor`. If
+  portaconv's UX changes, this doc's cross-refs need a look.
