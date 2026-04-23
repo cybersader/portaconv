@@ -7,8 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::adapters::{
-    dedup_sessions, grep_sessions, limit_sessions, parse_since, sort_sessions, ClaudeCode,
-    ConvoAdapter, SortKey, WorkspaceScope,
+    claude_code, dedup_sessions, detect_staleness, grep_sessions, limit_sessions,
+    list_project_dirs, parse_since, sort_sessions, ClaudeCode, ConvoAdapter, SortKey, StaleReport,
+    WorkspaceScope,
 };
 use crate::render::{render_markdown, MarkdownOptions};
 use crate::transform::{apply_path_rewrite, PathRewrite};
@@ -207,6 +208,23 @@ fn tools_list() -> Value {
                         }
                     }
                 }
+            },
+            {
+                "name": "doctor",
+                "description": "Diagnose stale `sessions-index.json` files under ~/.claude/projects/. The `/resume` picker reads the index, which goes stale when Claude Code is ungracefully shut down (WSL kill, suspend). Returns a list of stale projects: each entry has project_dir, lag_hours, missing flag, newest session id, and newest jsonl mtime/size. Read-only — does not touch the index. Use `pconv rebuild-index` (CLI only) to repair.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "project": {
+                            "type": "string",
+                            "description": "Scope to one project dir (absolute path under ~/.claude/projects/). Omit to scan all."
+                        },
+                        "stale_threshold_hours": {
+                            "type": "integer",
+                            "description": "Lag threshold in hours for flagging stale projects. Missing index is always stale. Default 24."
+                        }
+                    }
+                }
             }
         ]
     })
@@ -225,8 +243,79 @@ fn tools_call(params: Value) -> Result<Value, (i32, String)> {
     match env.name.as_str() {
         "list_conversations" => list_conversations(env.arguments),
         "get_conversation" => get_conversation(env.arguments),
+        "doctor" => doctor(env.arguments),
         other => Err((-32601, format!("tool not found: {other}"))),
     }
+}
+
+#[derive(Deserialize, Default)]
+struct DoctorMcpArgs {
+    #[serde(default)]
+    project: Option<String>,
+    #[serde(default)]
+    stale_threshold_hours: Option<i64>,
+}
+
+fn doctor(args: Value) -> Result<Value, (i32, String)> {
+    let args: DoctorMcpArgs = serde_json::from_value(args)
+        .map_err(|e| (-32602, format!("invalid doctor args: {e}")))?;
+    let threshold = args.stale_threshold_hours.unwrap_or(24);
+    let root = claude_code::projects_root()
+        .ok_or_else(|| (-32603, "no home dir".to_string()))?;
+    if !root.is_dir() {
+        return Err((
+            -32603,
+            format!(
+                "Claude Code storage not detected at {}",
+                root.display()
+            ),
+        ));
+    }
+    let project_dirs = match args.project.as_deref() {
+        Some(p) => vec![std::path::PathBuf::from(p)],
+        None => list_project_dirs(&root)
+            .map_err(|e| (-32603, format!("list project dirs: {e:#}")))?,
+    };
+    let mut stale: Vec<StaleReport> = Vec::new();
+    for dir in project_dirs {
+        match detect_staleness(&dir, threshold) {
+            Ok(Some(r)) => stale.push(r),
+            Ok(None) => {}
+            Err(e) => {
+                return Err((
+                    -32603,
+                    format!("detect_staleness {}: {e:#}", dir.display()),
+                ))
+            }
+        }
+    }
+    stale.sort_by(|a, b| b.lag_hours.cmp(&a.lag_hours));
+    let payload: Vec<Value> = stale
+        .iter()
+        .map(|r| {
+            use std::time::UNIX_EPOCH;
+            json!({
+                "project_dir": r.project_dir.display().to_string(),
+                "index_mtime_ms": r.index_mtime
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as u64),
+                "newest_jsonl": r.newest_jsonl.display().to_string(),
+                "newest_jsonl_mtime_ms": r.newest_jsonl_mtime
+                    .duration_since(UNIX_EPOCH)
+                    .ok()
+                    .map(|d| d.as_millis() as u64),
+                "newest_jsonl_size_bytes": r.newest_jsonl_size_bytes,
+                "lag_hours": if r.missing { Value::Null } else { json!(r.lag_hours) },
+                "missing": r.missing,
+                "newest_session_id": r.newest_session_id,
+            })
+        })
+        .collect();
+    let body = serde_json::to_string(&payload)
+        .map_err(|e| (-32603, format!("serialize doctor payload: {e}")))?;
+    Ok(json!({
+        "content": [ { "type": "text", "text": body } ]
+    }))
 }
 
 #[derive(Deserialize, Default)]

@@ -15,16 +15,16 @@ Sibling to [portagenty](https://github.com/cybersader/portagenty).
 ---
 
 > **Status: v0.1 surface feature-complete; not yet on crates.io.**
-> Claude Code adapter, `list` / `dump` / `mcp serve`, path-rewrite
-> transforms, per-file list cache, and explicit backing-file override
-> all shipped. Full guide at
+> Claude Code adapter, `list` / `dump` / `doctor` / `rebuild-index` /
+> `mcp serve`, path-rewrite transforms, per-file list cache, and
+> explicit backing-file override all shipped. Full guide at
 > [cybersader.github.io/portaconv](https://cybersader.github.io/portaconv/).
 
 ## The problem
 
 Claude Code (and every other agent CLI) stores conversation
 history keyed to the **absolute filesystem path** of the working
-directory at launch. This breaks in two ways:
+directory at launch. This breaks in three ways:
 
 1. **Storage fragmentation.** The same project accessed via WSL
    and Windows produces two separate encoded directories under
@@ -38,8 +38,18 @@ directory at launch. This breaks in two ways:
    Windows-launched Claude that resumes a WSL-authored session
    fails the first time it tries to `Read /mnt/c/…`.
 
+3. **Stale index.** Claude Code caches session summaries in
+   `sessions-index.json` alongside the `.jsonl`s. The picker for
+   `/resume` reads this index — but the write path only runs on
+   graceful shutdown, and ungraceful WSL closures (`wsl
+   --shutdown`, window close, machine suspend) skip it. On one
+   machine: 14 projects with the index lagging the actual jsonls
+   by up to 93 days. Upstream canonical issue: [#25032][s25032].
+
+[s25032]: https://github.com/anthropics/claude-code/issues/25032
+
 File-level sync is folly. The content carries the OS it was
-authored on.
+authored on, and the index can't be trusted to reflect reality.
 
 ## The pivot
 
@@ -59,12 +69,23 @@ conversations directly.
 ```
 pconv list                     # list Claude Code conversations
 pconv dump <session-id>        # paste-ready markdown to stdout
+pconv doctor                   # detect stale sessions-index.json
+pconv doctor --dump-stale      # also dump the newest session per stale project
+pconv rebuild-index --all      # rewrite sessions-index.json from the jsonls
 pconv mcp serve                # stdio MCP server
 ```
 
 Claude Code adapter only for v0.1. OpenCode / Cursor / Aider /
 continue.dev adapters are separate PRs after the adapter trait
 survives contact with reality.
+
+### Three failure modes, three primitives
+
+| Failure | Primitive | What it does |
+|---|---|---|
+| Cross-OS content poisoning | `pconv dump --rewrite wsl-to-win\|win-to-wsl` | Extracts + rewrites absolute paths; paste into a session on the other OS. |
+| Folder moved (portagenty workspace) | `pconv list --workspace-toml auto` | Finds sessions authored at the pre-move path via `previous_paths`. |
+| Stale `sessions-index.json` | `pconv doctor` + `pconv rebuild-index` | Detects lag; rebuilds the index from the `.jsonl`s with a dated `.bak` backup. |
 
 ## Install
 

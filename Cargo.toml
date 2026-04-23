@@ -1,6 +1,6 @@
 [package]
 name = "portaconv"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 rust-version = "1.82"
 description = "Terminal-native conversation extractor + MCP server for agent CLIs (Claude Code first). Normalizes to OpenAI Chat Completions format; paste-ready markdown output; OS-path rewriting."
@@ -38,6 +38,7 @@ insta = "1.41"
 predicates = "3.1"
 assert_cmd = "2.0"
 tempfile = "3.8"
+filetime = "0.2"
 
 [profile.release]
 lto = "thin"

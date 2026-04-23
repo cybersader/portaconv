@@ -11,8 +11,9 @@ use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::adapters::{
-    dedup_sessions, grep_sessions, limit_sessions, parse_since, sort_sessions, ClaudeCode,
-    ConvoAdapter, SortKey, WorkspaceScope,
+    build_index_for_project, claude_code, dedup_sessions, detect_staleness, grep_sessions,
+    limit_sessions, list_project_dirs, parse_since, sort_sessions, write_index_atomic, ClaudeCode,
+    ConvoAdapter, SortKey, StaleReport, WorkspaceScope,
 };
 use crate::model::Conversation;
 use crate::render::{render_markdown, MarkdownOptions};
@@ -35,6 +36,18 @@ pub enum Command {
     List(ListArgs),
     /// Dump one session to stdout.
     Dump(DumpArgs),
+    /// Diagnose stale `sessions-index.json` files under
+    /// `~/.claude/projects/`. Read-only. Pass `--dump-stale` to
+    /// additionally emit paste-ready markdown for the newest session in
+    /// each stale project so you can recover into a fresh `claude`
+    /// session without waiting on the picker.
+    Doctor(DoctorArgs),
+    /// Rewrite `sessions-index.json` from the actual `.jsonl` content.
+    /// The `/resume` picker reads the index; rebuilding restores it to
+    /// match reality after ungraceful shutdowns (WSL kill, suspend,
+    /// etc.) have left it behind. Atomic write; keeps a dated `.bak`
+    /// unless `--no-backup`.
+    RebuildIndex(RebuildIndexArgs),
     /// MCP-related subcommands.
     Mcp {
         #[command(subcommand)]
@@ -175,6 +188,63 @@ impl From<PathRewriteFlag> for PathRewrite {
             PathRewriteFlag::Strip => PathRewrite::Strip,
         }
     }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct DoctorArgs {
+    /// Scope to one project dir (absolute path to the encoded dir under
+    /// `~/.claude/projects/`). Omit to scan all.
+    #[arg(long)]
+    pub project: Option<PathBuf>,
+    /// Consider a project stale when its `sessions-index.json` lags the
+    /// newest `.jsonl` by more than this many hours. Missing index is
+    /// always stale. Default: 24 — most sessions idle longer than the
+    /// write cadence is measured in minutes, so anything beyond a day
+    /// is drift rather than race.
+    #[arg(long, default_value_t = 24)]
+    pub stale_threshold_hours: i64,
+    /// Also emit paste-ready markdown for the newest session in each
+    /// stale project, separated by `---` dividers. Paste into a fresh
+    /// `claude` session to recover context. Respects the renderer
+    /// defaults (collapsed thinking, truncated tool results).
+    #[arg(long)]
+    pub dump_stale: bool,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = DoctorFormat::Table)]
+    pub format: DoctorFormat,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+pub enum DoctorFormat {
+    /// Human-readable summary table.
+    Table,
+    /// Machine-readable list of stale projects. Useful for scripting.
+    Json,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct RebuildIndexArgs {
+    /// Rebuild a single project's index. Mutually exclusive with
+    /// `--all`.
+    #[arg(long)]
+    pub project: Option<PathBuf>,
+    /// Rebuild every project's index under `~/.claude/projects/`.
+    /// Combine with `--lag-threshold-hours` to skip fresh projects.
+    #[arg(long, conflicts_with = "project")]
+    pub all: bool,
+    /// When `--all`, only rebuild projects whose index lags by more
+    /// than this many hours (matches `doctor --stale-threshold-hours`
+    /// semantics). Default 0 = rebuild every project unconditionally.
+    #[arg(long, default_value_t = 0)]
+    pub lag_threshold_hours: i64,
+    /// Report what would change without writing. Exit 0 whether or not
+    /// anything is stale.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Skip the `.bak-YYYY-MM-DD` backup of the pre-rebuild index.
+    /// Default: keep the backup so a bad rebuild is recoverable.
+    #[arg(long)]
+    pub no_backup: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -388,6 +458,8 @@ pub fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::List(args) => run_list(args),
         Command::Dump(args) => run_dump(args),
+        Command::Doctor(args) => run_doctor(args),
+        Command::RebuildIndex(args) => run_rebuild_index(args),
         Command::Mcp {
             sub: McpCommand::Serve,
         } => crate::mcp::run_stdio_server(),
@@ -507,6 +579,245 @@ fn run_dump(args: DumpArgs) -> Result<()> {
             serde_json::to_writer_pretty(&mut out, &conv)?;
             writeln!(out)?;
         }
+    }
+    Ok(())
+}
+
+fn run_doctor(args: DoctorArgs) -> Result<()> {
+    let root = claude_code::projects_root()
+        .ok_or_else(|| anyhow!("no home dir — cannot locate ~/.claude/projects/"))?;
+    if !root.is_dir() {
+        return Err(anyhow!(
+            "Claude Code storage not found. Expected {} (or set PORTACONV_CLAUDE_ROOT)",
+            root.display()
+        ));
+    }
+
+    let project_dirs = match args.project.as_deref() {
+        Some(p) => vec![p.to_path_buf()],
+        None => list_project_dirs(&root)?,
+    };
+
+    let mut stale: Vec<StaleReport> = Vec::new();
+    for dir in project_dirs {
+        if let Some(rep) = detect_staleness(&dir, args.stale_threshold_hours)? {
+            stale.push(rep);
+        }
+    }
+    // Worst-first ordering — missing indexes sort to the top, then
+    // largest lag. The top row is the one most likely to bite you.
+    stale.sort_by(|a, b| b.lag_hours.cmp(&a.lag_hours));
+
+    let out = io::stdout();
+    let mut out = out.lock();
+    match args.format {
+        DoctorFormat::Json => {
+            let payload: Vec<serde_json::Value> = stale
+                .iter()
+                .map(|r| stale_report_to_json(r))
+                .collect();
+            serde_json::to_writer_pretty(&mut out, &payload)?;
+            writeln!(out)?;
+        }
+        DoctorFormat::Table => {
+            writeln!(
+                out,
+                "{:<60}  {:>8}  {:<36}  {:>10}",
+                "project", "lag", "newest session", "size"
+            )?;
+            writeln!(out, "{}", "-".repeat(124))?;
+            for r in &stale {
+                let lag = if r.missing {
+                    "MISSING".to_string()
+                } else if r.lag_hours >= 48 {
+                    format!("{}d", r.lag_hours / 24)
+                } else {
+                    format!("{}h", r.lag_hours)
+                };
+                let name = r
+                    .project_dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+                let name = truncate_middle(name, 60);
+                let sid = r.newest_session_id.as_deref().unwrap_or("-");
+                let size = format_size(r.newest_jsonl_size_bytes);
+                writeln!(out, "{name:<60}  {lag:>8}  {sid:<36}  {size:>10}")?;
+            }
+            writeln!(out, "\n{} stale project(s)", stale.len())?;
+        }
+    }
+
+    if args.dump_stale && !stale.is_empty() {
+        let adapter = ClaudeCode;
+        for (i, r) in stale.iter().enumerate() {
+            if i == 0 {
+                writeln!(out)?;
+            } else {
+                writeln!(out, "\n---\n")?;
+            }
+            writeln!(
+                out,
+                "<!-- portaconv doctor: stale project {} lag={}h -->",
+                r.project_dir.display(),
+                r.lag_hours
+            )?;
+            writeln!(out)?;
+            let Some(sid) = r.newest_session_id.as_deref() else {
+                writeln!(out, "(no session id; skipping dump)")?;
+                continue;
+            };
+            match adapter.load_from_file(&r.newest_jsonl, sid) {
+                Ok(conv) => {
+                    let md = render_markdown(&conv, &MarkdownOptions::default());
+                    out.write_all(md.as_bytes())?;
+                }
+                Err(e) => {
+                    writeln!(out, "(load failed: {e:#})")?;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn stale_report_to_json(r: &StaleReport) -> serde_json::Value {
+    use std::time::UNIX_EPOCH;
+    serde_json::json!({
+        "project_dir": r.project_dir.display().to_string(),
+        "index_mtime_ms": r.index_mtime
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64),
+        "newest_jsonl": r.newest_jsonl.display().to_string(),
+        "newest_jsonl_mtime_ms": r.newest_jsonl_mtime
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_millis() as u64),
+        "newest_jsonl_size_bytes": r.newest_jsonl_size_bytes,
+        "lag_hours": if r.missing { serde_json::Value::Null } else { serde_json::json!(r.lag_hours) },
+        "missing": r.missing,
+        "newest_session_id": r.newest_session_id,
+    })
+}
+
+fn format_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    if bytes >= GB {
+        format!("{:.1}G", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1}M", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1}K", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes}B")
+    }
+}
+
+fn run_rebuild_index(args: RebuildIndexArgs) -> Result<()> {
+    // Validate — exactly one of `--project` or `--all`.
+    if args.project.is_none() && !args.all {
+        return Err(anyhow!(
+            "pconv rebuild-index: pass --project <path> or --all"
+        ));
+    }
+
+    let root = claude_code::projects_root()
+        .ok_or_else(|| anyhow!("no home dir — cannot locate ~/.claude/projects/"))?;
+    if !root.is_dir() && args.all {
+        return Err(anyhow!(
+            "Claude Code storage not found. Expected {} (or set PORTACONV_CLAUDE_ROOT)",
+            root.display()
+        ));
+    }
+
+    let project_dirs = match args.project.as_deref() {
+        Some(p) => {
+            // User pointed at a specific dir — a missing path is a hard
+            // error, not a warning. Otherwise typos like `--project ./x`
+            // silently succeed with "0 rebuilt" which is worse than
+            // failing loudly.
+            if !p.is_dir() {
+                return Err(anyhow!(
+                    "project dir not found: {} (pass an existing encoded dir under ~/.claude/projects/)",
+                    p.display()
+                ));
+            }
+            vec![p.to_path_buf()]
+        }
+        None => list_project_dirs(&root)?,
+    };
+
+    let out = io::stdout();
+    let mut out = out.lock();
+    let prefix = if args.dry_run { "[DRY] " } else { "" };
+    let mut rebuilt = 0usize;
+    let mut skipped = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+
+    for dir in project_dirs {
+        // Gate: when --all + threshold > 0, skip fresh projects.
+        if args.all && args.lag_threshold_hours > 0 {
+            let staleness = detect_staleness(&dir, args.lag_threshold_hours)?;
+            if staleness.is_none() {
+                skipped += 1;
+                continue;
+            }
+        }
+
+        let idx = build_index_for_project(&dir)?;
+        let entry_count = idx.entries.len();
+        let index_path = dir.join("sessions-index.json");
+        let dir_name = dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("(unnamed)");
+
+        if args.dry_run {
+            writeln!(
+                out,
+                "{prefix}would rebuild {dir_name}: {entry_count} entries"
+            )?;
+            rebuilt += 1;
+            continue;
+        }
+
+        match write_index_atomic(&index_path, &idx, !args.no_backup) {
+            Ok(bak) => {
+                match bak {
+                    Some(bp) => writeln!(
+                        out,
+                        "rebuilt {dir_name}: {entry_count} entries (backup: {})",
+                        bp.display()
+                    )?,
+                    None => writeln!(out, "rebuilt {dir_name}: {entry_count} entries")?,
+                }
+                rebuilt += 1;
+            }
+            Err(e) => {
+                writeln!(out, "FAILED {dir_name}: {e:#}")?;
+                errors.push(format!("{dir_name}: {e:#}"));
+                skipped += 1;
+            }
+        }
+    }
+
+    writeln!(
+        out,
+        "\n{prefix}{rebuilt} project(s) {}, {skipped} skipped",
+        if args.dry_run { "would be rebuilt" } else { "rebuilt" }
+    )?;
+
+    // In --all mode, per-project failures are visible-but-non-fatal so
+    // one bad project doesn't kill the batch. But if EVERY rebuild
+    // failed, that's worth surfacing as a process-level error.
+    if rebuilt == 0 && !errors.is_empty() {
+        return Err(anyhow!(
+            "all rebuild attempts failed:\n  {}",
+            errors.join("\n  ")
+        ));
     }
     Ok(())
 }

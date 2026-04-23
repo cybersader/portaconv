@@ -10,9 +10,11 @@ use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::cache::{self, ListCache};
@@ -20,7 +22,7 @@ use super::{ConvoAdapter, SessionMeta, WorkspaceScope};
 use crate::model::{ContentBlock, Conversation, Message, Role};
 
 /// Storage root for Claude Code. Overridable via env for tests.
-fn projects_root() -> Option<PathBuf> {
+pub(crate) fn projects_root() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("PORTACONV_CLAUDE_ROOT") {
         return Some(PathBuf::from(p));
     }
@@ -564,6 +566,330 @@ fn decode_block(b: &Value) -> ContentBlock {
         },
         _ => ContentBlock::Unknown { raw: b.clone() },
     }
+}
+
+// ---------------------------------------------------------------------
+// Index diagnostics + rebuild (sessions-index.json).
+//
+// Claude Code writes a `sessions-index.json` summary file in each
+// encoded project dir (`~/.claude/projects/<encoded-cwd>/`). The picker
+// for `/resume` reads it to show session lists. The file is known to go
+// stale relative to the actual `.jsonl` content (upstream issue #25032
+// and siblings). This block provides:
+//
+//   - `detect_staleness`  — compare index mtime to newest jsonl mtime
+//   - `build_index_for_project` — reconstruct a fresh SessionIndex from jsonls
+//   - `write_index_atomic` — tempfile+rename write with optional dated backup
+//
+// All three share the `scan_file` / `walk` plumbing above. The adapter
+// deliberately does NOT rebuild on `load()` calls — the write path is a
+// side effect a user explicitly asks for via `pconv rebuild-index`.
+// ---------------------------------------------------------------------
+
+/// One entry in a Claude Code `sessions-index.json`. Field names match
+/// the on-disk JSON (camelCase) via serde rename. Fields that are
+/// sometimes absent upstream (summary, customTitle) are `Option` so the
+/// reader doesn't error on older or fresh files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexEntry {
+    pub session_id: String,
+    pub full_path: String,
+    /// Milliseconds since UNIX epoch. Upstream uses a JS Date.now()
+    /// value, which is `u64` for any realistic date.
+    pub file_mtime: u64,
+    #[serde(default)]
+    pub first_prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    pub message_count: usize,
+    /// ISO 8601 timestamp of the first message (or empty if unknown).
+    #[serde(default)]
+    pub created: String,
+    /// ISO 8601 timestamp of the last message (or empty if unknown).
+    #[serde(default)]
+    pub modified: String,
+    /// Always empty in our reconstruction — the adapter doesn't resolve
+    /// a git branch without re-running `git` against the project, which
+    /// isn't always safe (the project dir may not exist on this host).
+    /// Upstream populates this; we leave it blank.
+    #[serde(default)]
+    pub git_branch: String,
+    /// The project's absolute cwd, taken from the first record in the
+    /// first jsonl. Best-effort — the encoded dir name is lossy.
+    #[serde(default)]
+    pub project_path: String,
+    #[serde(default)]
+    pub is_sidechain: bool,
+}
+
+/// Top-level `sessions-index.json` document.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionIndex {
+    /// Observed upstream value is 1. Preserved as-is on rebuild.
+    pub version: u32,
+    pub entries: Vec<IndexEntry>,
+    /// Optional — upstream includes this for the encoded dir's nominal
+    /// project path. We populate it from the first scanned jsonl's cwd.
+    #[serde(rename = "originalPath", skip_serializing_if = "Option::is_none")]
+    pub original_path: Option<String>,
+}
+
+/// A project that looks stale by the `detect_staleness` rule. The
+/// picker-facing summary fields (`newest_session_id`, `newest_jsonl`)
+/// are what the caller wants to show or dump.
+#[derive(Debug, Clone)]
+pub struct StaleReport {
+    pub project_dir: PathBuf,
+    /// The mtime observed on `sessions-index.json`, if the file exists.
+    pub index_mtime: Option<SystemTime>,
+    /// The mtime of the newest non-subagent `.jsonl` in the project dir.
+    pub newest_jsonl_mtime: SystemTime,
+    pub newest_jsonl: PathBuf,
+    /// `newest_jsonl_mtime - index_mtime` in whole hours. `i64::MAX` if
+    /// the index is missing entirely.
+    pub lag_hours: i64,
+    /// True when the index file is absent (distinct from "old").
+    pub missing: bool,
+    /// First sessionId found in the newest jsonl. Useful to surface in
+    /// the diagnostic table so the user can `claude -r <id>` directly.
+    pub newest_session_id: Option<String>,
+    /// Bytes on disk for the newest jsonl. Orientation only — massive
+    /// files may be too big to practically resume.
+    pub newest_jsonl_size_bytes: u64,
+}
+
+/// List the top-level project directories under `~/.claude/projects/`.
+/// One per encoded cwd. Callers iterate these to scan for staleness or
+/// rebuild.
+pub fn list_project_dirs(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    let rd = fs::read_dir(root)
+        .with_context(|| format!("read_dir {}", root.display()))?;
+    for entry in rd.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            out.push(p);
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// Return the set of non-subagent `.jsonl` files directly inside a
+/// project dir. The rebuild only tracks these — nested session dirs
+/// (`<uuid>/subagents/*`) and old-style `agent-*.jsonl` at the root are
+/// excluded per the same rules `list()` uses.
+fn project_top_level_jsonls(project_dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    let rd = match fs::read_dir(project_dir) {
+        Ok(r) => r,
+        Err(_) => return Ok(Vec::new()),
+    };
+    for entry in rd.flatten() {
+        let p = entry.path();
+        if !p.is_file() {
+            continue;
+        }
+        if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        if is_subagent_file(&p) {
+            continue;
+        }
+        out.push(p);
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// Compare the `sessions-index.json` mtime in `project_dir` against the
+/// newest jsonl in the same dir. Returns `Some(StaleReport)` when the
+/// index is missing OR lags by more than `threshold_hours`. Returns
+/// `None` for fresh projects and for empty dirs (no jsonls = nothing to
+/// be stale about).
+pub fn detect_staleness(
+    project_dir: &Path,
+    threshold_hours: i64,
+) -> Result<Option<StaleReport>> {
+    let jsonls = project_top_level_jsonls(project_dir)?;
+    if jsonls.is_empty() {
+        return Ok(None);
+    }
+
+    // Find the newest jsonl by mtime.
+    let mut newest: Option<(PathBuf, SystemTime, u64)> = None;
+    for p in &jsonls {
+        let Ok(md) = fs::metadata(p) else { continue };
+        let Ok(mt) = md.modified() else { continue };
+        let size = md.len();
+        match &newest {
+            Some((_, cur, _)) if *cur >= mt => {}
+            _ => newest = Some((p.clone(), mt, size)),
+        }
+    }
+    let (newest_path, newest_mtime, newest_size) = match newest {
+        Some(t) => t,
+        None => return Ok(None),
+    };
+
+    let index_path = project_dir.join("sessions-index.json");
+    let index_mtime = fs::metadata(&index_path)
+        .and_then(|m| m.modified())
+        .ok();
+
+    let (lag_hours, missing) = match index_mtime {
+        Some(idx) => {
+            let lag = newest_mtime
+                .duration_since(idx)
+                .ok()
+                .map(|d| (d.as_secs() / 3600) as i64)
+                .unwrap_or(0);
+            (lag, false)
+        }
+        None => (i64::MAX, true),
+    };
+
+    if !missing && lag_hours <= threshold_hours {
+        return Ok(None);
+    }
+
+    // Pluck a sessionId from the newest jsonl so callers can point the
+    // user at `claude -r <id>` directly. scan_file returns per-sessionId
+    // entries; pick the first (order stable across runs).
+    let newest_session_id = scan_file(&newest_path)
+        .ok()
+        .and_then(|metas| metas.into_iter().next().map(|m| m.id));
+
+    Ok(Some(StaleReport {
+        project_dir: project_dir.to_path_buf(),
+        index_mtime,
+        newest_jsonl_mtime: newest_mtime,
+        newest_jsonl: newest_path,
+        lag_hours,
+        missing,
+        newest_session_id,
+        newest_jsonl_size_bytes: newest_size,
+    }))
+}
+
+/// Reconstruct a `SessionIndex` by scanning every top-level jsonl in
+/// the project dir. One `IndexEntry` per distinct sessionId observed
+/// across the files.
+pub fn build_index_for_project(project_dir: &Path) -> Result<SessionIndex> {
+    let jsonls = project_top_level_jsonls(project_dir)?;
+    let mut entries: Vec<IndexEntry> = Vec::new();
+    let mut first_cwd: Option<String> = None;
+
+    for path in &jsonls {
+        let metas = match scan_file(path) {
+            Ok(v) => v,
+            Err(e) => {
+                // A single bad jsonl shouldn't kill the rebuild — warn
+                // and carry on. Upstream's picker is just as resilient.
+                eprintln!(
+                    "pconv: warning: scan failed for {}: {e:#}",
+                    path.display()
+                );
+                continue;
+            }
+        };
+        let file_mtime = fs::metadata(path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
+        for meta in metas {
+            if first_cwd.is_none() {
+                first_cwd = meta.cwd.as_ref().map(|p| p.display().to_string());
+            }
+            let project_path = meta
+                .cwd
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            entries.push(IndexEntry {
+                session_id: meta.id,
+                full_path: path.display().to_string(),
+                file_mtime,
+                first_prompt: meta.title.unwrap_or_default(),
+                custom_title: None,
+                summary: None,
+                message_count: meta.message_count,
+                created: meta
+                    .started_at
+                    .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+                    .unwrap_or_default(),
+                modified: meta
+                    .updated_at
+                    .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+                    .unwrap_or_default(),
+                git_branch: String::new(),
+                project_path,
+                is_sidechain: false,
+            });
+        }
+    }
+
+    // Deterministic ordering: newest modified first. Upstream doesn't
+    // guarantee order but this is what the picker effectively presents.
+    entries.sort_by(|a, b| b.modified.cmp(&a.modified));
+
+    Ok(SessionIndex {
+        version: 1,
+        entries,
+        original_path: first_cwd,
+    })
+}
+
+/// Atomic write of `sessions-index.json`. Writes to `<path>.tmp` then
+/// renames over the target. Creates a `<filename>.bak-YYYY-MM-DD`
+/// alongside first unless `backup` is false. Safe under crash —
+/// either the new file is in place or the old one is, never both
+/// partially written (modulo the filesystem's rename atomicity).
+pub fn write_index_atomic(
+    index_path: &Path,
+    idx: &SessionIndex,
+    backup: bool,
+) -> Result<Option<PathBuf>> {
+    let mut backup_path: Option<PathBuf> = None;
+    if backup && index_path.exists() {
+        let date = Utc::now().format("%Y-%m-%d");
+        let name = index_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("sessions-index.json");
+        let bak = index_path.with_file_name(format!("{name}.bak-{date}"));
+        fs::copy(index_path, &bak)
+            .with_context(|| format!("backup {}", bak.display()))?;
+        backup_path = Some(bak);
+    }
+
+    // Write to a sibling temp file then rename. Avoid `.tmp` as an
+    // extension suffix directly — some filesystems interpret double
+    // extensions oddly. Use a hidden dotfile prefix instead.
+    let parent = index_path
+        .parent()
+        .ok_or_else(|| anyhow!("index path has no parent: {}", index_path.display()))?;
+    let name = index_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("sessions-index.json");
+    let tmp_path = parent.join(format!(".{name}.tmp"));
+
+    let json = serde_json::to_string_pretty(idx)
+        .context("serialize SessionIndex")?;
+    fs::write(&tmp_path, json.as_bytes())
+        .with_context(|| format!("write tmp {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, index_path).with_context(|| {
+        format!("rename {} → {}", tmp_path.display(), index_path.display())
+    })?;
+
+    Ok(backup_path)
 }
 
 #[cfg(test)]

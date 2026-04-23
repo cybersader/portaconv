@@ -14,7 +14,10 @@ use crate::model::Conversation;
 pub mod cache;
 pub mod claude_code;
 
-pub use claude_code::ClaudeCode;
+pub use claude_code::{
+    build_index_for_project, detect_staleness, list_project_dirs, write_index_atomic, ClaudeCode,
+    IndexEntry, SessionIndex, StaleReport,
+};
 
 /// Lightweight session entry returned by `list()`. Cheap to produce —
 /// the adapter does not parse the full message stream for listings.

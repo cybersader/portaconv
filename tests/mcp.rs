@@ -63,7 +63,7 @@ fn initialize_handshake() {
 }
 
 #[test]
-fn tools_list_describes_both_tools() {
+fn tools_list_describes_tools() {
     let resps = roundtrip(&[json!({
         "jsonrpc": "2.0", "id": 2, "method": "tools/list"
     })]);
@@ -71,6 +71,26 @@ fn tools_list_describes_both_tools() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"list_conversations"));
     assert!(names.contains(&"get_conversation"));
+    assert!(names.contains(&"doctor"));
+}
+
+#[test]
+fn doctor_tool_reports_missing_index() {
+    // The fixture corpus has zero sessions-index.json files → every
+    // project dir is `missing: true` from doctor's perspective.
+    let resps = roundtrip(&[json!({
+        "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": { "name": "doctor", "arguments": {} }
+    })]);
+    let text = resps[0]["result"]["content"][0]["text"].as_str().unwrap();
+    let reports: Value = serde_json::from_str(text).unwrap();
+    let arr = reports.as_array().unwrap();
+    // 3 project dirs in the fixture corpus, all with missing indexes.
+    assert!(!arr.is_empty(), "expected stale projects, got: {text}");
+    for r in arr {
+        assert_eq!(r["missing"], true);
+        assert!(r["newest_session_id"].is_string());
+    }
 }
 
 #[test]
