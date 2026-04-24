@@ -150,7 +150,16 @@ get_conversation {
   full_results?:    boolean     // default false — results truncated at 600 chars
   tail?:            integer     // keep last N messages; drop count in extensions.truncated
 }
-→ rendered body (in content[0].text)`}</code></pre>
+→ rendered body (in content[0].text)
+
+doctor {
+  project?:               string   // absolute path under ~/.claude/projects/; omit to scan all
+  stale_threshold_hours?: integer  // default 24; missing index is always stale
+}
+→ JSON array: [{ project_dir, lag_hours, missing, newest_session_id, newest_jsonl_mtime_ms, ... }]
+  Read-only diagnosis of stale sessions-index.json files (upstream Claude Code
+  ungraceful-shutdown bug). Repair is CLI-only via pconv rebuild-index —
+  write ops stay off the MCP surface so agents can't accidentally fan out damage.`}</code></pre>
 </div>
 
 **Exposed resource:** one URI template `convos://conversation/{id}`.
@@ -288,15 +297,16 @@ whether the agent is speaking protocol or shelling out.
 
 <div style="border-left: 4px solid var(--sl-color-orange); padding: 0.6rem 1rem; margin: 1.5rem 0; background: var(--sl-color-orange-low); font-size: 0.9rem;">
 <ul style="margin: 0; padding-left: 1.2rem;">
-  <li>Doesn't write back to any tool's storage. <em>Ever.</em></li>
+  <li>Doesn't write back to any tool's session storage. <em>Ever.</em> (The one write op, <code>rebuild-index</code>, touches only Claude Code's <code>sessions-index.json</code> — never <code>.jsonl</code> content — and isn't exposed via MCP.)</li>
   <li>Doesn't run a daemon / watcher / background sync.</li>
   <li>Doesn't manage clipboards — pipe to <code>clip.exe</code> / <code>pbcopy</code> / <code>wl-copy</code> yourself.</li>
-  <li>Doesn't do full-text search — get-by-id only in v0.1 (search tracked for v0.2+).</li>
+  <li>Doesn't do full-text search — get-by-id only. (Tracked as a separate verb on the <a href="/portaconv/project/roadmap/">roadmap</a> if demand shows up.)</li>
   <li>Doesn't know about portagenty's runtime state — only reads the TOML file at call time.</li>
+  <li><strong>Only sees Claude Code.</strong> Work done via other tools (Cursor, web claude.ai, continue.dev) or sessions that never persisted to <code>~/.claude/projects/</code> is invisible. Cross-reference <code>git log</code> for coverage gaps.</li>
 </ul>
 </div>
 
-## Planned portagenty shim (not v0.1)
+## Planned portagenty shim (portagenty-side work)
 
 The eventual `pa convos` subcommand will shell out to `pconv` with
 workspace context pre-filled:
@@ -312,5 +322,9 @@ pa convos dump <id>
 # move — prompts the user to run pconv to see old-path sessions.
 ```
 
-This ships as a separate PR in the portagenty repo once portaconv
-reaches v0.1 publish. portaconv stays usable standalone.
+portaconv's side of the contract (the `--workspace-toml` flag, the
+defensive read of `previous_paths`) is already shipped — the shim is
+zero-risk additive work on the portagenty repo. portaconv stays fully
+usable standalone; the shim is a convenience wrapper, not a gate. See
+the [roadmap](/portaconv/project/roadmap/#portagenty-side-lives-in-the-other-repo)
+for the full portagenty-side checklist.

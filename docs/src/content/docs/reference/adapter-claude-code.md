@@ -5,13 +5,12 @@ sidebar:
   order: 2
 ---
 
-Empirical freeze of what the Claude Code adapter handles in portaconv
-v0.1, based on a spike against six real JSONLs pulled from
+Empirical contract the Claude Code adapter was built against —
+originally a Phase 1 spike against six real JSONLs pulled from
 `~/.claude/projects/` on 2026-04-20 (host: Linux/WSL, Claude Code
-versions 2.0.76 → 2.1.51 observed).
-
-The adapter trait and schema types get committed in Phase 2 against
-this contract.
+versions 2.0.76 → 2.1.51 observed). The v0.1 adapter in
+`src/adapters/claude_code.rs` implements this mapping; changes there
+should be reflected back into this doc.
 
 ## 1. Scope
 
@@ -28,8 +27,8 @@ this contract.
 ## 2. Sample inventory
 
 Six JSONLs, spread across size, OS encoding, and on-disk shape.
-Parser: `examples/scan-claude-jsonl.rs` (throwaway, deleted before
-Phase 2 lands).
+Parser used for the spike was a throwaway `examples/scan-claude-jsonl.rs`,
+long since deleted — this doc is its empirical residue.
 
 Project directory names from the sampled corpus are redacted
 (`<project-N>`) since this repo is public and they reference the
@@ -70,18 +69,19 @@ for. Don't silently ignore.
 (first real-corpus run on 2026-04-20 surfaced 150 such records across
 5 distinct types in a 457-message session):
 
-| `type` | Payload fields | v0.2 target bucket |
-|---|---|---|
-| `permission-mode` | `permissionMode`, `sessionId` | Extensions — track state changes |
-| `attachment` | `attachment`, `entrypoint`, `cwd`, `sessionId`, plus the standard record-header fields | Extensions until renderer decides how to show |
-| `last-prompt` | `lastPrompt`, `sessionId` | Skip |
-| `custom-title` | `customTitle`, `sessionId` | **Schema** — promote to `Conversation.title` when present (overrides the first-user-message derivation) |
-| `agent-name` | `agentName`, `sessionId` | Extensions — relates to subagent naming |
+| `type` | Payload fields | v0.1 handling | Target bucket (future polish) |
+|---|---|---|---|
+| `permission-mode` | `permissionMode`, `sessionId` | `unknown_records` | Extensions — track state changes |
+| `attachment` | `attachment`, `entrypoint`, `cwd`, `sessionId`, plus the standard record-header fields | `unknown_records` | Extensions until renderer decides how to show |
+| `last-prompt` | `lastPrompt`, `sessionId` | `unknown_records` | Skip |
+| `custom-title` | `customTitle`, `sessionId` | `unknown_records` | **Schema** — promote to `Conversation.title` when present (overrides the first-user-message derivation) |
+| `agent-name` | `agentName`, `sessionId` | `unknown_records` | Extensions — relates to subagent naming |
 
-v0.1 lands these as `unknown_records` via the adapter's catch-all.
-The v0.2 polish pass that promotes them should also re-examine
-whether the sample was too small (likely yes — 6 JSONLs out of 2607
-in the author's corpus).
+v0.1 lands all five as `unknown_records` via the adapter's catch-all —
+they're preserved losslessly, just not promoted. A future polish pass
+should pick off the "Target bucket" column; `custom-title` in
+particular would noticeably improve list titles. Tracked on the
+[roadmap](/portaconv/project/roadmap/#likely-next).
 
 ## 4. Subagent decision
 
@@ -176,41 +176,34 @@ user messages or web search results, not authored paths. The
 rewrite transform must not assume all encountered paths are
 rewritable.
 
-## 7. Open questions surfaced for Phase 2
+## 7. Open questions, resolved during Phase 2
 
-Flag these to the user before types are committed.
+These were flagged during the spike. Status as of v0.1:
 
-1. **Multi-session JSONLs.** Sample #5 (20 MB) contained 2 distinct
-   `sessionId` values in one file. Spot-check suggests `/compact`
-   writes the continuation under a new session UUID but appends to
-   the same file. v0.1 adapter must decide:
-   - **(a)** `list()` surfaces every distinct `sessionId` seen,
-     `load(id)` filters to records matching that sessionId only; OR
-   - **(b)** `list()` surfaces only the file-level id (first
-     sessionId seen), `load()` returns the full file concatenated.
-   - Recommendation: **(a)**. Matches the Claude-side mental model
-     where `/resume` picks by sessionId, not by file.
-2. **Compact-summary record inclusion.** The `isCompactSummary: true`
-   user record carries the summarized prior session's text in
-   `message.content[0].text`. v0.1 treats this as a normal user
-   message. Confirm the user wants this (it can be 10+ KB of prose
-   that wasn't typed by the human). An `--exclude-compact-summaries`
-   flag may be worthwhile.
-3. **Path-rewrite scope.** §6 counted line-level hits as a proxy.
-   The real transform must target prose inside `text` blocks plus
-   tool-call `input` fields (e.g. `Read.file_path`) — **not** the
-   record's own `cwd` field, which is metadata describing where the
-   session ran. Spec this during Phase 2 before regex tuning.
-4. **Oldest Claude Code version supported.** Sample #6 (v2.0.76)
-   was missing `requestId` and `slug` fields on many records. v2.1.x
-   samples have them. The adapter must tolerate missing fields
-   gracefully. Worth picking an explicit floor ("tested against
-   ≥ 2.0.x; earlier versions best-effort").
-5. **`progress` record skip.** Confirm: does dropping all 204
-   `progress` records from sample #5 lose anything a paste-recovery
-   user would want? If the subagent ran a 5-step plan that only
-   showed up in progress streams (never in the final tool_result),
-   that context is gone. Spot-check one paste output to validate.
+1. **Multi-session JSONLs.** **Resolved: option (a).** `scan_file()`
+   surfaces every distinct `sessionId` it sees; `parse_session(path,
+   id)` filters to records matching that id. Matches Claude's own
+   `/resume` mental model (sessionId is the identity; the file is an
+   implementation detail).
+2. **Compact-summary record inclusion.** **Resolved: include as-is.**
+   `isCompactSummary: true` user records land as normal user messages
+   — the summary text IS the recovered content. No
+   `--exclude-compact-summaries` flag shipped; no user has asked.
+3. **Path-rewrite scope.** **Resolved.** The transform targets prose
+   inside `Text` blocks + tool-call `input` fields (e.g.
+   `Read.file_path`) + tool-result bodies — **never** the
+   `Conversation.cwd` metadata (authoring-env info, not content).
+   See the [rewrite scope table](/portaconv/reference/commands/#rewrite-scope).
+4. **Oldest Claude Code version supported.** **Still open.** No
+   explicit floor declared; the adapter tolerates missing `requestId`
+   / `slug` gracefully (tested against 2.0.76 → 2.1.51). Picking a
+   formal floor is tracked for a future polish pass.
+5. **`progress` record skip.** **Resolved: skip confirmed.** The
+   final `assistant` message's `tool_use` / `tool_result` pair
+   captures the consolidated subagent output; the streaming
+   `progress` records were transient duplicates. Spot-check validated
+   — no user-visible loss. Re-evaluate only if a specific
+   subagent-paste use case surfaces gaps.
 
 ## Appendix A — full top-level field set observed
 
