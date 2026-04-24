@@ -666,8 +666,7 @@ pub struct StaleReport {
 /// rebuild.
 pub fn list_project_dirs(root: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
-    let rd = fs::read_dir(root)
-        .with_context(|| format!("read_dir {}", root.display()))?;
+    let rd = fs::read_dir(root).with_context(|| format!("read_dir {}", root.display()))?;
     for entry in rd.flatten() {
         let p = entry.path();
         if p.is_dir() {
@@ -710,10 +709,7 @@ fn project_top_level_jsonls(project_dir: &Path) -> Result<Vec<PathBuf>> {
 /// index is missing OR lags by more than `threshold_hours`. Returns
 /// `None` for fresh projects and for empty dirs (no jsonls = nothing to
 /// be stale about).
-pub fn detect_staleness(
-    project_dir: &Path,
-    threshold_hours: i64,
-) -> Result<Option<StaleReport>> {
+pub fn detect_staleness(project_dir: &Path, threshold_hours: i64) -> Result<Option<StaleReport>> {
     let jsonls = project_top_level_jsonls(project_dir)?;
     if jsonls.is_empty() {
         return Ok(None);
@@ -736,9 +732,7 @@ pub fn detect_staleness(
     };
 
     let index_path = project_dir.join("sessions-index.json");
-    let index_mtime = fs::metadata(&index_path)
-        .and_then(|m| m.modified())
-        .ok();
+    let index_mtime = fs::metadata(&index_path).and_then(|m| m.modified()).ok();
 
     let (lag_hours, missing) = match index_mtime {
         Some(idx) => {
@@ -789,10 +783,7 @@ pub fn build_index_for_project(project_dir: &Path) -> Result<SessionIndex> {
             Err(e) => {
                 // A single bad jsonl shouldn't kill the rebuild — warn
                 // and carry on. Upstream's picker is just as resilient.
-                eprintln!(
-                    "pconv: warning: scan failed for {}: {e:#}",
-                    path.display()
-                );
+                eprintln!("pconv: warning: scan failed for {}: {e:#}", path.display());
                 continue;
             }
         };
@@ -864,8 +855,7 @@ pub fn write_index_atomic(
             .and_then(|n| n.to_str())
             .unwrap_or("sessions-index.json");
         let bak = index_path.with_file_name(format!("{name}.bak-{date}"));
-        fs::copy(index_path, &bak)
-            .with_context(|| format!("backup {}", bak.display()))?;
+        fs::copy(index_path, &bak).with_context(|| format!("backup {}", bak.display()))?;
         backup_path = Some(bak);
     }
 
@@ -881,13 +871,11 @@ pub fn write_index_atomic(
         .unwrap_or("sessions-index.json");
     let tmp_path = parent.join(format!(".{name}.tmp"));
 
-    let json = serde_json::to_string_pretty(idx)
-        .context("serialize SessionIndex")?;
+    let json = serde_json::to_string_pretty(idx).context("serialize SessionIndex")?;
     fs::write(&tmp_path, json.as_bytes())
         .with_context(|| format!("write tmp {}", tmp_path.display()))?;
-    fs::rename(&tmp_path, index_path).with_context(|| {
-        format!("rename {} → {}", tmp_path.display(), index_path.display())
-    })?;
+    fs::rename(&tmp_path, index_path)
+        .with_context(|| format!("rename {} → {}", tmp_path.display(), index_path.display()))?;
 
     Ok(backup_path)
 }

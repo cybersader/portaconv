@@ -579,7 +579,10 @@ fn rebuild_index_dry_run_writes_nothing() {
         .stdout(contains("would be rebuilt"));
 
     // No sessions-index.json should have appeared anywhere.
-    for proj in ["-test-workspace-sample", "-test-workspace-sample-before-move"] {
+    for proj in [
+        "-test-workspace-sample",
+        "-test-workspace-sample-before-move",
+    ] {
         let p = td.path().join(proj).join("sessions-index.json");
         assert!(
             !p.exists(),
@@ -608,7 +611,11 @@ fn rebuild_index_writes_fresh_index_and_satisfies_doctor() {
         .path()
         .join("-test-workspace-sample")
         .join("sessions-index.json");
-    assert!(idx_path.exists(), "index not written at {}", idx_path.display());
+    assert!(
+        idx_path.exists(),
+        "index not written at {}",
+        idx_path.display()
+    );
     let body = std::fs::read_to_string(&idx_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(parsed["version"], 1);
@@ -650,11 +657,7 @@ fn rebuild_index_preserves_pre_existing_via_backup() {
     Command::cargo_bin("pconv")
         .unwrap()
         .env("PORTACONV_CLAUDE_ROOT", td.path())
-        .args([
-            "rebuild-index",
-            "--project",
-            proj.to_str().unwrap(),
-        ])
+        .args(["rebuild-index", "--project", proj.to_str().unwrap()])
         .assert()
         .success();
 
@@ -734,12 +737,7 @@ fn rebuild_index_project_and_all_conflict() {
     let got = Command::cargo_bin("pconv")
         .unwrap()
         .env("PORTACONV_CLAUDE_ROOT", fixture_root())
-        .args([
-            "rebuild-index",
-            "--all",
-            "--project",
-            "/tmp/ignored",
-        ])
+        .args(["rebuild-index", "--all", "--project", "/tmp/ignored"])
         .assert()
         .failure()
         .get_output()
@@ -761,11 +759,7 @@ fn rebuild_index_missing_project_dir_errors_cleanly() {
     Command::cargo_bin("pconv")
         .unwrap()
         .env("PORTACONV_CLAUDE_ROOT", fixture_root())
-        .args([
-            "rebuild-index",
-            "--project",
-            "/does/not/exist/anywhere",
-        ])
+        .args(["rebuild-index", "--project", "/does/not/exist/anywhere"])
         .assert()
         .failure();
 }
@@ -783,7 +777,12 @@ fn rebuild_index_lag_threshold_skips_fresh_projects() {
     Command::cargo_bin("pconv")
         .unwrap()
         .env("PORTACONV_CLAUDE_ROOT", td.path())
-        .args(["rebuild-index", "--project", proj.to_str().unwrap(), "--no-backup"])
+        .args([
+            "rebuild-index",
+            "--project",
+            proj.to_str().unwrap(),
+            "--no-backup",
+        ])
         .assert()
         .success();
 
@@ -792,7 +791,7 @@ fn rebuild_index_lag_threshold_skips_fresh_projects() {
     filetime::set_file_mtime(&idx_path, now).unwrap();
     for e in std::fs::read_dir(&proj).unwrap().flatten() {
         if e.path().extension().and_then(|s| s.to_str()) == Some("jsonl") {
-            filetime::set_file_mtime(&e.path(), now).unwrap();
+            filetime::set_file_mtime(e.path(), now).unwrap();
         }
     }
 
@@ -824,7 +823,7 @@ fn rebuild_index_lag_threshold_skips_fresh_projects() {
     // The rewrite updated fileMtime but content shape remains consistent.
     let parsed: serde_json::Value = serde_json::from_str(&rewritten).unwrap();
     assert_eq!(parsed["version"], 1);
-    assert!(parsed["entries"].as_array().unwrap().len() >= 1);
+    assert!(!parsed["entries"].as_array().unwrap().is_empty());
     // Order might shift by sort — just pin the body is valid JSON.
     let _ = original; // touched to appease the linter; intentional no-op
 }
@@ -854,7 +853,7 @@ fn rebuild_index_all_with_threshold_skips_fresh_peers() {
         }
         for e in std::fs::read_dir(&pp).unwrap().flatten() {
             if e.path().is_file() {
-                filetime::set_file_mtime(&e.path(), now).ok();
+                filetime::set_file_mtime(e.path(), now).ok();
             }
         }
     }
@@ -978,16 +977,17 @@ fn rebuild_index_handles_malformed_jsonl_gracefully() {
     let td = fresh_fixture_clone();
     let proj = td.path().join("-test-workspace-sample");
     let bad = proj.join("corrupt-session.jsonl");
-    std::fs::write(
-        &bad,
-        "not-valid-json-here\n{\"type\":\"partial\":broken\n",
-    )
-    .unwrap();
+    std::fs::write(&bad, "not-valid-json-here\n{\"type\":\"partial\":broken\n").unwrap();
 
     Command::cargo_bin("pconv")
         .unwrap()
         .env("PORTACONV_CLAUDE_ROOT", td.path())
-        .args(["rebuild-index", "--project", proj.to_str().unwrap(), "--no-backup"])
+        .args([
+            "rebuild-index",
+            "--project",
+            proj.to_str().unwrap(),
+            "--no-backup",
+        ])
         .assert()
         .success(); // must not fail
 

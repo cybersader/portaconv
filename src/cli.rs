@@ -23,12 +23,31 @@ use crate::transform::{apply_path_rewrite, PathRewrite};
 #[command(
     name = "pconv",
     version,
-    about = "Terminal-native conversation extractor for agent CLIs"
+    about = "Terminal-native conversation extractor for agent CLIs",
+    after_help = SCOPE_NOTE
 )]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
 }
+
+/// Scope / gotcha text shared across the top-level help and the
+/// `list` subcommand help. Two failure modes agents keep rediscovering:
+///   (1) filesystem mtime drift from metadata-only touches (backup
+///       tools, cloud-sync indexers) ≠ new conversation content, and
+///   (2) pconv's horizon is exactly what Claude Code persists — work
+///       via other tools or unpersisted sessions is invisible.
+const SCOPE_NOTE: &str = "\
+Scope / gotchas:
+  - `updated` is last-message-timestamp (trustworthy). Filesystem
+    mtime under ~/.claude/projects/ can drift without new content
+    (backup tools, cloud-sync, metadata touches) — trust `updated`,
+    not `ls -la`.
+  - pconv only sees Claude Code sessions persisted to
+    ~/.claude/projects/. Work via other tools (Cursor, web claude.ai,
+    continue.dev) or sessions that never persisted are invisible.
+    For coverage gaps, cross-reference `git log` in the project.
+";
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
@@ -56,6 +75,7 @@ pub enum Command {
 }
 
 #[derive(clap::Args, Debug)]
+#[command(after_help = SCOPE_NOTE)]
 pub struct ListArgs {
     /// Output format.
     #[arg(long, value_enum, default_value_t = ListFormat::Table)]
@@ -606,16 +626,13 @@ fn run_doctor(args: DoctorArgs) -> Result<()> {
     }
     // Worst-first ordering — missing indexes sort to the top, then
     // largest lag. The top row is the one most likely to bite you.
-    stale.sort_by(|a, b| b.lag_hours.cmp(&a.lag_hours));
+    stale.sort_by_key(|r| std::cmp::Reverse(r.lag_hours));
 
     let out = io::stdout();
     let mut out = out.lock();
     match args.format {
         DoctorFormat::Json => {
-            let payload: Vec<serde_json::Value> = stale
-                .iter()
-                .map(|r| stale_report_to_json(r))
-                .collect();
+            let payload: Vec<serde_json::Value> = stale.iter().map(stale_report_to_json).collect();
             serde_json::to_writer_pretty(&mut out, &payload)?;
             writeln!(out)?;
         }
@@ -807,7 +824,11 @@ fn run_rebuild_index(args: RebuildIndexArgs) -> Result<()> {
     writeln!(
         out,
         "\n{prefix}{rebuilt} project(s) {}, {skipped} skipped",
-        if args.dry_run { "would be rebuilt" } else { "rebuilt" }
+        if args.dry_run {
+            "would be rebuilt"
+        } else {
+            "rebuilt"
+        }
     )?;
 
     // In --all mode, per-project failures are visible-but-non-fatal so

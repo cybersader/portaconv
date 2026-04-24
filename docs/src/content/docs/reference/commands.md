@@ -11,6 +11,21 @@ walks through the whole loop (install → list → dump → paste) before
 you dig into flag-by-flag detail.
 :::
 
+:::caution[Scope — what pconv does and doesn't see]
+Two failure modes agents keep rediscovering:
+
+1. **`updated` is last-message-timestamp, not filesystem mtime.**
+   Files under `~/.claude/projects/` can get their mtime bumped by
+   backup tools, cloud-sync indexers, or bare metadata touches
+   without a single byte of new conversation content. Trust
+   `updated_at`; don't cross-check with `ls -la`.
+2. **pconv only sees Claude Code.** Work done via other tools
+   (Cursor, web claude.ai, continue.dev) or sessions that never
+   persisted to `~/.claude/projects/` is invisible. When a project's
+   recent activity doesn't appear here, check `git log` — it may
+   have happened outside Claude Code entirely.
+:::
+
 ## `pconv list`
 
 List conversations discoverable on this machine. Surfaces each

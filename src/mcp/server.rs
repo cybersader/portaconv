@@ -125,7 +125,7 @@ fn tools_list() -> Value {
         "tools": [
             {
                 "name": "list_conversations",
-                "description": "List Claude Code conversations discoverable on this machine. Returns SessionMeta entries with id, cwd, started_at, updated_at, message_count, source_path.",
+                "description": "List Claude Code conversations discoverable on this machine. Returns SessionMeta entries with id, cwd, started_at, updated_at, message_count, source_path.\n\nNOTE: `updated_at` is the last-message-timestamp inside the JSONL (trustworthy). Do NOT cross-check against filesystem mtime under ~/.claude/projects/ — mtime drifts from metadata-only touches (backup tools, cloud-sync) without new conversation content. pconv only sees Claude Code sessions that were persisted; work done via other tools (Cursor, web claude.ai) or unpersisted sessions is invisible — cross-reference `git log` for coverage gaps.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -167,7 +167,7 @@ fn tools_list() -> Value {
             },
             {
                 "name": "get_conversation",
-                "description": "Load and render one session. Default format is paste-ready markdown. Path-rewrite transforms are opt-in. Pass `latest: true` (optionally with `workspace_toml`) to resolve to the most recent session in scope without a second call.",
+                "description": "Load and render one session. Default format is paste-ready markdown. Path-rewrite transforms are opt-in. Pass `latest: true` (optionally with `workspace_toml`) to resolve to the most recent session in scope without a second call.\n\nNOTE: pconv only sees Claude Code conversations persisted to ~/.claude/projects/. If a session id isn't found, it may have been authored via another tool (Cursor, web claude.ai, continue.dev) or never persisted at all — pconv can't recover what Claude Code never wrote.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -257,39 +257,31 @@ struct DoctorMcpArgs {
 }
 
 fn doctor(args: Value) -> Result<Value, (i32, String)> {
-    let args: DoctorMcpArgs = serde_json::from_value(args)
-        .map_err(|e| (-32602, format!("invalid doctor args: {e}")))?;
+    let args: DoctorMcpArgs =
+        serde_json::from_value(args).map_err(|e| (-32602, format!("invalid doctor args: {e}")))?;
     let threshold = args.stale_threshold_hours.unwrap_or(24);
-    let root = claude_code::projects_root()
-        .ok_or_else(|| (-32603, "no home dir".to_string()))?;
+    let root = claude_code::projects_root().ok_or_else(|| (-32603, "no home dir".to_string()))?;
     if !root.is_dir() {
         return Err((
             -32603,
-            format!(
-                "Claude Code storage not detected at {}",
-                root.display()
-            ),
+            format!("Claude Code storage not detected at {}", root.display()),
         ));
     }
     let project_dirs = match args.project.as_deref() {
         Some(p) => vec![std::path::PathBuf::from(p)],
-        None => list_project_dirs(&root)
-            .map_err(|e| (-32603, format!("list project dirs: {e:#}")))?,
+        None => {
+            list_project_dirs(&root).map_err(|e| (-32603, format!("list project dirs: {e:#}")))?
+        }
     };
     let mut stale: Vec<StaleReport> = Vec::new();
     for dir in project_dirs {
         match detect_staleness(&dir, threshold) {
             Ok(Some(r)) => stale.push(r),
             Ok(None) => {}
-            Err(e) => {
-                return Err((
-                    -32603,
-                    format!("detect_staleness {}: {e:#}", dir.display()),
-                ))
-            }
+            Err(e) => return Err((-32603, format!("detect_staleness {}: {e:#}", dir.display()))),
         }
     }
-    stale.sort_by(|a, b| b.lag_hours.cmp(&a.lag_hours));
+    stale.sort_by_key(|r| std::cmp::Reverse(r.lag_hours));
     let payload: Vec<Value> = stale
         .iter()
         .map(|r| {
