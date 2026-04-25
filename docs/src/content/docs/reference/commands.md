@@ -200,7 +200,12 @@ special case — it's always reported, threshold ignored.
 is shown as `MISSING` if the index is absent, otherwise `Nh` (up to
 48 hours) or `Nd` (beyond). "Newest session" is the first `sessionId`
 found in the newest jsonl — copy it to `claude -r <uuid>` for instant
-picker-bypass recovery.
+picker-bypass recovery, **but `claude -r` only finds sessions whose
+JSONL lives under your current cwd's encoded-dir** (upstream bug
+[#5768](https://github.com/anthropics/claude-code/issues/5768) — open).
+If you're not in the project's original cwd, `claude -r` will say
+"No conversation found"; use `pconv dump --dump-stale` (below) or
+`pconv dump <id>` from any directory instead.
 
 ### Paste-ready handoff for stale projects
 

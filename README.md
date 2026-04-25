@@ -4,9 +4,10 @@
 
 **Terminal-native conversation extractor + MCP server for agent CLIs.**
 
-Paste-ready recovery for when `/resume` lets you down,
-folder moves break the cache, or WSL and Windows fragment
-your Claude Code history into two diverged buckets.
+Paste-ready recovery for the cases `claude -r <uuid>` can't reach —
+cross-OS content drift, sessions whose original cwd is moved or
+different, broken `/resume` pickers, and conversations you want to
+commit into the repo.
 
 Sibling to [portagenty](https://github.com/cybersader/portagenty).
 
@@ -26,10 +27,20 @@ Claude Code (and every other agent CLI) stores conversation
 history keyed to the **absolute filesystem path** of the working
 directory at launch. This breaks in three ways:
 
-1. **Storage fragmentation.** The same project accessed via WSL
-   and Windows produces two separate encoded directories under
-   `~/.claude/projects/`. `/resume` from either only sees half
-   the history.
+1. **Storage fragmentation + cwd-strict resume.** The same project
+   accessed via WSL and Windows produces two separate encoded
+   directories under `~/.claude/projects/`. `/resume` from either
+   only sees half the history. Worse, even `claude -r <uuid>`
+   doesn't bypass this — it only looks in the encoded-dir of your
+   *current* cwd, not by sessionId across all encoded dirs. Move
+   the project, cd to a sibling, run from `/tmp`: *"No conversation
+   found with session ID."* Empirically reproduced; tracked
+   upstream as [#5768][s5768] (open) and [#28745][s28745] (open
+   feature request for the missing `--cwd` / `--ignore-directory`
+   flag).
+
+[s5768]: https://github.com/anthropics/claude-code/issues/5768
+[s28745]: https://github.com/anthropics/claude-code/issues/28745
 
 2. **Content poisoning.** Spot-check of one 54 MB session: 9999+
    `/mnt/c/…` and 72 `C:\…` path references baked into
@@ -79,13 +90,14 @@ Claude Code adapter only for v0.1. OpenCode / Cursor / Aider /
 continue.dev adapters are separate PRs after the adapter trait
 survives contact with reality.
 
-### Three failure modes, three primitives
+### Failure modes ↔ primitives
 
 | Failure | Primitive | What it does |
 |---|---|---|
-| Cross-OS content poisoning | `pconv dump --rewrite wsl-to-win\|win-to-wsl` | Extracts + rewrites absolute paths; paste into a session on the other OS. |
-| Folder moved (portagenty workspace) | `pconv list --workspace-toml auto` | Finds sessions authored at the pre-move path via `previous_paths`. |
-| Stale `sessions-index.json` | `pconv doctor` + `pconv rebuild-index` | Detects lag; rebuilds the index from the `.jsonl`s with a dated `.bak` backup. |
+| Cross-OS content poisoning (paths inside session won't resolve on the other OS) | `pconv dump --rewrite wsl-to-win\|win-to-wsl` | Extracts + rewrites absolute paths; paste into a session on the other OS. |
+| Folder moved / different cwd / `claude -r <uuid>` says "not found" | `pconv list --workspace-toml auto` + `pconv dump <id>` | Finds sessions authored at the pre-move path via `previous_paths`; dumps to paste-ready markdown so you can resume from any cwd. |
+| Stale `sessions-index.json` (picker shows wrong/missing sessions) | `pconv doctor` + `pconv rebuild-index` | Detects lag; rebuilds the index from the `.jsonl`s with a dated `.bak` backup. |
+| Want to commit the conversation as a repo artifact | `pconv dump <id> > docs/agent-context/…md` | Standard stdout redirect; the git repo is the store. |
 
 ## Install
 
@@ -94,6 +106,34 @@ cargo install --git https://github.com/cybersader/portaconv
 ```
 
 (Published to crates.io once v0.1 stabilizes.)
+
+## When `claude -r` is enough (and when it isn't)
+
+`claude -r <uuid>` is the cheap move when **all** of the following hold:
+
+- you know the session UUID,
+- you're on the same OS the session was authored on,
+- file paths inside the session still resolve from your current shell,
+- **and your current cwd matches the session's original cwd** (this one
+  catches people — verify with `find ~/.claude/projects -name "<uuid>.jsonl"`
+  and cd to the path that encodes to the same dir name).
+
+If any of those breaks, `claude -r` returns *"No conversation found with
+session ID"* and you're stuck. That's portaconv territory:
+
+| You hit… | Reach for… |
+|---|---|
+| Don't remember the UUID | `pconv list --workspace-toml auto` |
+| Folder moved / different cwd / `claude -r` "not found" | `pconv dump <id>` (paste into a fresh `claude` from anywhere) |
+| Cross-OS resume (WSL → Windows) | `pconv dump <id> --rewrite wsl-to-win` |
+| `/resume` picker is lying | `pconv doctor` then `pconv rebuild-index` |
+| Need a `.md` artifact in the repo | `pconv dump <id> > docs/agent-context/…md` |
+| Agent should self-heal via tool calls | `pconv mcp serve` (3 tools, stdio JSON-RPC) |
+| Last N messages only | `pconv dump <id> --tail 50` |
+
+The framing: portaconv is the layer **around** `claude -r`, not a
+replacement. For the narrow happy-path it covers, `claude -r` + `cd`
+is right.
 
 ## Usage with Claude Code
 
