@@ -67,6 +67,13 @@ pub enum Command {
     /// etc.) have left it behind. Atomic write; keeps a dated `.bak`
     /// unless `--no-backup`.
     RebuildIndex(RebuildIndexArgs),
+    /// Build a bounded, recency-biased recovery handoff from a session.
+    /// For sessions that overflowed the model context window (where
+    /// `/compact` 400s): pins the original task, keeps the newest
+    /// interaction units, omits thinking + injected skill bodies, and
+    /// enforces an exact UTF-8 byte budget on the rendered markdown.
+    /// Purely local — never calls a model, never touches the source.
+    Handoff(HandoffArgs),
     /// MCP-related subcommands.
     Mcp {
         #[command(subcommand)]
@@ -188,6 +195,44 @@ pub struct DumpArgs {
     /// `source_path` field.
     #[arg(long)]
     pub file: Option<PathBuf>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct HandoffArgs {
+    /// Session ID (UUID). Optional when `--latest` is set.
+    pub session_id: Option<String>,
+    /// Resolve to the most recent session discoverable (after workspace
+    /// scope + dedup). Combine with `--cwd` to scope to a directory.
+    #[arg(long)]
+    pub latest: bool,
+    /// With `--latest`: only consider sessions whose recorded cwd is
+    /// exactly this path. The usual rescue is `--latest --cwd "$PWD"`.
+    #[arg(long)]
+    pub cwd: Option<PathBuf>,
+    /// Scope latest-session lookup by a portagenty workspace TOML.
+    /// Accepts an explicit path or `auto`. Mutually exclusive with --cwd.
+    #[arg(long, conflicts_with = "cwd")]
+    pub workspace_toml: Option<String>,
+    /// Load from this specific JSONL, bypassing the corpus walk.
+    #[arg(long)]
+    pub file: Option<PathBuf>,
+    /// Hard cap on the rendered handoff, in UTF-8 bytes.
+    #[arg(long, default_value_t = 49152)]
+    pub max_bytes: usize,
+    /// Only the newest N messages are candidates for the recent-context
+    /// suffix (the original task is pinned independently). 0 = all.
+    #[arg(long, default_value_t = 120)]
+    pub candidate_messages: usize,
+    /// Per-block byte cap (text blocks; tool inputs/results use halves).
+    #[arg(long, default_value_t = 8192)]
+    pub max_block_bytes: usize,
+    /// Write to this path (atomic; user-only permissions) instead of
+    /// stdout. Refuses to overwrite unless --force.
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+    /// Allow overwriting an existing --output path.
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -480,10 +525,122 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Dump(args) => run_dump(args),
         Command::Doctor(args) => run_doctor(args),
         Command::RebuildIndex(args) => run_rebuild_index(args),
+        Command::Handoff(args) => run_handoff(args),
         Command::Mcp {
             sub: McpCommand::Serve,
         } => crate::mcp::run_stdio_server(),
     }
+}
+
+/// Resolve which session `handoff` should load. Mirrors
+/// `resolve_dump_target` but adds `--cwd` scoping for the common
+/// "rescue the session I was just in, from its own directory" flow.
+fn resolve_handoff_target(adapter: &ClaudeCode, args: &HandoffArgs) -> Result<String> {
+    if let Some(id) = args.session_id.as_deref() {
+        if args.latest {
+            return Err(anyhow!(
+                "--latest and a positional session id are mutually exclusive — pick one"
+            ));
+        }
+        return Ok(id.to_string());
+    }
+    if !args.latest {
+        return Err(anyhow!(
+            "pconv handoff: give a session id, or pass --latest (optionally with --cwd \"$PWD\")"
+        ));
+    }
+    let scope = build_workspace_scope(args.workspace_toml.as_deref())?;
+    let metas = adapter
+        .list(Some(&scope))
+        .context("listing sessions to resolve --latest")?;
+    let mut metas = dedup_sessions(metas);
+    if let Some(want) = args.cwd.as_deref() {
+        metas.retain(|m| m.cwd.as_deref() == Some(want));
+    }
+    let pick = metas.into_iter().next().ok_or_else(|| {
+        anyhow!(
+            "no sessions found{}",
+            if args.cwd.is_some() {
+                " for this --cwd"
+            } else if args.workspace_toml.is_some() {
+                " in this workspace"
+            } else {
+                ""
+            }
+        )
+    })?;
+    Ok(pick.id)
+}
+
+fn run_handoff(args: HandoffArgs) -> Result<()> {
+    let adapter = ClaudeCode;
+    if !adapter.detect() {
+        return Err(anyhow!(
+            "Claude Code storage not found. Expected ~/.claude/projects/ (or set PORTACONV_CLAUDE_ROOT)"
+        ));
+    }
+    let conv = match args.file.as_deref() {
+        Some(path) => {
+            let metas = adapter.list_sessions_in_file(path)?;
+            let id = match args.session_id.as_deref() {
+                Some(id) => id.to_string(),
+                None => metas
+                    .into_iter()
+                    .max_by_key(|m| m.updated_at)
+                    .map(|m| m.id)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "no sessions found in {} — is this a Claude Code JSONL?",
+                            path.display()
+                        )
+                    })?,
+            };
+            adapter
+                .load_from_file(path, &id)
+                .with_context(|| format!("loading {id} from {}", path.display()))?
+        }
+        None => {
+            let target_id = resolve_handoff_target(&adapter, &args)?;
+            adapter.load(&target_id)?
+        }
+    };
+    let opts = crate::handoff::HandoffOptions {
+        max_bytes: args.max_bytes,
+        candidate_messages: args.candidate_messages,
+        max_block_bytes: args.max_block_bytes,
+    };
+    let doc = crate::handoff::render_handoff(&conv, &opts).map_err(|e| anyhow!(e))?;
+    debug_assert!(doc.len() <= args.max_bytes);
+
+    match args.output.as_deref() {
+        None => {
+            let out = io::stdout();
+            let mut out = out.lock();
+            out.write_all(doc.as_bytes())?;
+        }
+        Some(path) => {
+            if path.exists() && !args.force {
+                return Err(anyhow!(
+                    "{} exists — pass --force to overwrite",
+                    path.display()
+                ));
+            }
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            // Atomic-ish: write a sibling temp file then rename.
+            let tmp = path.with_extension("tmp-handoff");
+            std::fs::write(&tmp, doc.as_bytes())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+            }
+            std::fs::rename(&tmp, path)?;
+            eprintln!("handoff written: {} ({} bytes)", path.display(), doc.len());
+        }
+    }
+    Ok(())
 }
 
 fn run_list(args: ListArgs) -> Result<()> {

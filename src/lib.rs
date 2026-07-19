@@ -7,6 +7,7 @@
 
 pub mod adapters;
 pub mod cli;
+pub mod handoff;
 pub mod mcp;
 pub mod model;
 pub mod render;
