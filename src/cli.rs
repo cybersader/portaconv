@@ -600,8 +600,20 @@ fn run_handoff(args: HandoffArgs) -> Result<()> {
                 .with_context(|| format!("loading {id} from {}", path.display()))?
         }
         None => {
+            // Progress goes to stderr: stdout may be the handoff itself,
+            // and both resolution (corpus metadata scan) and load (large
+            // JSONL parse) can take tens of seconds on big corpora.
+            if args.session_id.is_none() {
+                eprintln!("pconv handoff: resolving latest session (corpus scan — can take a while on large corpora)…");
+            }
             let target_id = resolve_handoff_target(&adapter, &args)?;
-            adapter.load(&target_id)?
+            eprintln!("pconv handoff: loading session {target_id}…");
+            let c = adapter.load(&target_id)?;
+            eprintln!(
+                "pconv handoff: loaded {} messages; rendering bounded handoff…",
+                c.messages.len()
+            );
+            c
         }
     };
     let opts = crate::handoff::HandoffOptions {

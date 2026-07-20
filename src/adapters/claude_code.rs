@@ -150,6 +150,29 @@ impl ConvoAdapter for ClaudeCode {
         // writes a continuation under a new sessionId but appends to the
         // parent's file. Prefer the canonical home file (basename stem ==
         // sessionId); tie-break by size (larger = fuller history).
+        //
+        // Fast path (2026-07-20): pick_rank prefers a home file over ANY
+        // content-scanned sibling, so when `<id>.jsonl` exists we can find
+        // it by filename alone — directory listings only, no file reads.
+        // The full content scan (open+read every JSONL in the corpus —
+        // minutes on a large DrvFS-mounted ~/.claude) runs only when no
+        // home file exists (compact-continuation edge case).
+        let mut home_files: Vec<PathBuf> = Vec::new();
+        for file in walk_jsonls(&root)? {
+            if is_subagent_file(&file) {
+                continue;
+            }
+            let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            if stem == id {
+                home_files.push(file);
+            }
+        }
+        if !home_files.is_empty() {
+            // Multiple home files = WSL/Windows-encoded duplicates; the
+            // size tie-break in pick_rank picks the fuller history.
+            home_files.sort_by_key(|p| pick_rank(p, id));
+            return parse_session(&home_files[0], id);
+        }
         let mut candidates: Vec<PathBuf> = Vec::new();
         for file in walk_jsonls(&root)? {
             if is_subagent_file(&file) {
