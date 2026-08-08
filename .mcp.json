@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "portaconv": {
+      "command": "pconv",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
