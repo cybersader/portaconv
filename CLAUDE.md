@@ -40,10 +40,15 @@ Sibling project to [portagenty](https://github.com/cybersader/portagenty)
 
 ## Current stage
 
-**v0.1.0 — four commands live.** Core model, Claude Code adapter,
-markdown renderer, path-rewrite transforms, stdio MCP server, and
-sessions-index diagnostics + rebuild all shipped. 84 tests pass
-(29 unit / 37 CLI integration / 18 MCP).
+**v0.1.0 plus `handoff`; no tagged release yet.** Core model,
+Claude Code adapter, markdown renderer, path-rewrite transforms,
+stdio MCP server, sessions-index diagnostics + rebuild, and
+`pconv handoff` (bounded recovery docs for sessions too large to
+`/compact`) all shipped. MIT-licensed; see `CONTRIBUTING.md`.
+
+Verify everything CI checks with one command: `sh scripts/check.sh`
+(fmt, clippy, tests, release build). Docs site: `cd docs && bun
+install --frozen-lockfile && bun run build && bun run smoke:no-build`.
 
 ## Hard constraints (locked)
 
@@ -63,7 +68,8 @@ These came out of the design Q&A. Don't reopen without user OK.
 - **Claude Code adapter only through v0.1.** OpenCode / Cursor /
   Aider / continue.dev = separate follow-up PRs.
 - **Read-only by default; writes are explicit and rare.**
-  `rebuild-index` is the only writing subcommand. It writes
+  `rebuild-index` is the only subcommand that writes Claude Code
+  state (`handoff -o` writes only its own new output file). It writes
   atomically (tempfile + rename) with a dated `.bak-YYYY-MM-DD`
   backup by default. The "safe to run, can't break your Claude
   state" contract still holds — it only touches
@@ -74,7 +80,7 @@ These came out of the design Q&A. Don't reopen without user OK.
 - **No path-rewrite by default.** `--rewrite wsl-to-win` etc. is
   opt-in.
 
-## v0.1 command surface
+## Command surface
 
 ```
 pconv list                     # list conversations (Claude Code)
@@ -82,6 +88,7 @@ pconv dump <session-id>        # paste-ready markdown to stdout
 pconv doctor                   # detect stale sessions-index.json
 pconv doctor --dump-stale      # + paste-ready markdown for stale projects
 pconv rebuild-index --all      # rewrite sessions-index.json from the .jsonls
+pconv handoff --latest --cwd "$PWD"  # bounded recovery doc (not on MCP)
 pconv mcp serve                # stdio MCP server
 ```
 
