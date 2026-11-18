@@ -83,6 +83,7 @@ pconv dump <session-id>        # paste-ready markdown to stdout
 pconv doctor                   # detect stale sessions-index.json
 pconv doctor --dump-stale      # also dump the newest session per stale project
 pconv rebuild-index --all      # rewrite sessions-index.json from the jsonls
+pconv handoff --latest --cwd "$PWD"  # bounded recovery doc when /compact can't run
 pconv mcp serve                # stdio MCP server
 ```
 
