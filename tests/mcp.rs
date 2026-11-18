@@ -365,3 +365,80 @@ fn rewrite_flag_honored_via_mcp() {
     let parsed: Value = serde_json::from_str(text).unwrap();
     assert!(parsed["messages"].is_array());
 }
+
+/// Keys of a JSON object, sorted — stable across serde map ordering.
+fn sorted_keys(v: &Value) -> Vec<String> {
+    let mut keys: Vec<String> = v
+        .as_object()
+        .map(|o| o.keys().cloned().collect())
+        .unwrap_or_default();
+    keys.sort();
+    keys
+}
+
+/// The MCP surface other agents call is a public contract: renaming a
+/// tool, argument, enum value, or result field breaks callers silently.
+/// This snapshot captures only that surface — descriptions are free to
+/// change. A failure here is a deliberate gate: additive changes are
+/// fine but must be reviewed (`cargo insta review`); removals and
+/// renames need a version bump and a CHANGELOG note.
+#[test]
+fn mcp_public_contract_is_stable() {
+    let resps = roundtrip(&[
+        json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": { "protocolVersion": "2024-11-05", "capabilities": {} } }),
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+        json!({ "jsonrpc": "2.0", "id": 3, "method": "resources/list" }),
+        json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+                "params": { "name": "list_conversations", "arguments": {} } }),
+        json!({ "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+                "params": { "name": "doctor", "arguments": {} } }),
+        json!({ "jsonrpc": "2.0", "id": 6, "method": "tools/call",
+                "params": { "name": "get_conversation",
+                            "arguments": { "id": "aaaaaaaa-bbbb-cccc-dddd-000000000001",
+                                           "format": "json" } } }),
+    ]);
+    let by_id = |id: i64| -> &Value {
+        &resps
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap_or_else(|| panic!("no response for id {id}"))["result"]
+    };
+    let tool_json = |id: i64| -> Value {
+        serde_json::from_str(by_id(id)["content"][0]["text"].as_str().unwrap()).unwrap()
+    };
+
+    let mut tools = Vec::new();
+    for t in by_id(2)["tools"].as_array().unwrap() {
+        let props = &t["inputSchema"]["properties"];
+        let args: Vec<Value> = sorted_keys(props)
+            .into_iter()
+            .map(|k| {
+                let p = &props[&k];
+                json!({ "name": k, "type": p["type"], "enum": p.get("enum") })
+            })
+            .collect();
+        tools.push(json!({ "name": t["name"], "arguments": args }));
+    }
+    let templates: Vec<Value> = by_id(3)["resourceTemplates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| json!({ "uriTemplate": r["uriTemplate"], "mimeType": r["mimeType"] }))
+        .collect();
+
+    let conversation = tool_json(6);
+    let contract = json!({
+        "protocolVersion": by_id(1)["protocolVersion"],
+        "serverName": by_id(1)["serverInfo"]["name"],
+        "tools": tools,
+        "resourceTemplates": templates,
+        "results": {
+            "list_conversations[]": sorted_keys(&tool_json(4)[0]),
+            "doctor[]": sorted_keys(&tool_json(5)[0]),
+            "get_conversation(json)": sorted_keys(&conversation),
+            "get_conversation(json).messages[]": sorted_keys(&conversation["messages"][0]),
+        },
+    });
+    insta::assert_snapshot!(serde_json::to_string_pretty(&contract).unwrap());
+}

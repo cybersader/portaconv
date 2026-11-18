@@ -1,0 +1,175 @@
+---
+source: tests/mcp.rs
+expression: "serde_json::to_string_pretty(&contract).unwrap()"
+---
+{
+  "protocolVersion": "2024-11-05",
+  "resourceTemplates": [
+    {
+      "mimeType": "text/markdown",
+      "uriTemplate": "convos://conversation/{id}"
+    }
+  ],
+  "results": {
+    "doctor[]": [
+      "index_mtime_ms",
+      "lag_hours",
+      "missing",
+      "newest_jsonl",
+      "newest_jsonl_mtime_ms",
+      "newest_jsonl_size_bytes",
+      "newest_session_id",
+      "project_dir"
+    ],
+    "get_conversation(json)": [
+      "cwd",
+      "extensions",
+      "id",
+      "messages",
+      "started_at",
+      "title"
+    ],
+    "get_conversation(json).messages[]": [
+      "content",
+      "extensions",
+      "role",
+      "timestamp"
+    ],
+    "list_conversations[]": [
+      "cwd",
+      "id",
+      "message_count",
+      "source_path",
+      "started_at",
+      "title",
+      "tool",
+      "updated_at"
+    ]
+  },
+  "serverName": "portaconv",
+  "tools": [
+    {
+      "arguments": [
+        {
+          "enum": null,
+          "name": "grep",
+          "type": "string"
+        },
+        {
+          "enum": null,
+          "name": "limit",
+          "type": "integer"
+        },
+        {
+          "enum": null,
+          "name": "min_messages",
+          "type": "integer"
+        },
+        {
+          "enum": null,
+          "name": "reverse",
+          "type": "boolean"
+        },
+        {
+          "enum": null,
+          "name": "show_duplicates",
+          "type": "boolean"
+        },
+        {
+          "enum": null,
+          "name": "since",
+          "type": "string"
+        },
+        {
+          "enum": [
+            "updated",
+            "started",
+            "msgs",
+            "title",
+            "id"
+          ],
+          "name": "sort",
+          "type": "string"
+        },
+        {
+          "enum": null,
+          "name": "workspace_toml",
+          "type": "string"
+        }
+      ],
+      "name": "list_conversations"
+    },
+    {
+      "arguments": [
+        {
+          "enum": null,
+          "name": "file",
+          "type": "string"
+        },
+        {
+          "enum": [
+            "markdown",
+            "json"
+          ],
+          "name": "format",
+          "type": "string"
+        },
+        {
+          "enum": null,
+          "name": "full_results",
+          "type": "boolean"
+        },
+        {
+          "enum": null,
+          "name": "id",
+          "type": "string"
+        },
+        {
+          "enum": null,
+          "name": "include_thinking",
+          "type": "boolean"
+        },
+        {
+          "enum": null,
+          "name": "latest",
+          "type": "boolean"
+        },
+        {
+          "enum": [
+            "wsl-to-win",
+            "win-to-wsl",
+            "strip"
+          ],
+          "name": "rewrite",
+          "type": "string"
+        },
+        {
+          "enum": null,
+          "name": "tail",
+          "type": "integer"
+        },
+        {
+          "enum": null,
+          "name": "workspace_toml",
+          "type": "string"
+        }
+      ],
+      "name": "get_conversation"
+    },
+    {
+      "arguments": [
+        {
+          "enum": null,
+          "name": "project",
+          "type": "string"
+        },
+        {
+          "enum": null,
+          "name": "stale_threshold_hours",
+          "type": "integer"
+        }
+      ],
+      "name": "doctor"
+    }
+  ]
+}

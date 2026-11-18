@@ -18,7 +18,7 @@ import { Card, CardGrid, Aside } from "@astrojs/starlight/components";
 
 ## Here's what you do
 
-Four commands. That's the whole tool.
+Five commands and an MCP server. That's the whole tool.
 
 ```sh
 pconv list                          # see your recent sessions
@@ -28,6 +28,7 @@ pconv dump <session-id> | clip.exe  # WSL — copy to clipboard
 
 pconv doctor                        # detect stale sessions-index.json
 pconv rebuild-index --all           # repair the /resume picker
+pconv handoff --latest --cwd "$PWD"  # session too big for /compact
 ```
 
 Paste into a new Claude Code session, claude.ai, opencode, whatever
@@ -115,6 +116,12 @@ walks through install → first dump → MCP wiring end-to-end.
     native `/resume` picker works correctly. Atomic write, dated
     `.bak-YYYY-MM-DD` backup. `--all --lag-threshold-hours 168`
     for weekly cron.
+  </Card>
+  <Card title="pconv handoff" icon="rocket">
+    Bounded recovery doc for a session that overflowed the context
+    window (where `/compact` fails). Pins the original task, keeps
+    the newest exchanges, drops thinking, and enforces an exact
+    byte budget (`--max-bytes`, default 48 KiB). Never calls a model.
   </Card>
   <Card title="pconv mcp serve" icon="seti:config">
     Stdio MCP server. `list_conversations`, `get_conversation`,
@@ -321,8 +328,9 @@ independently:
 **v0.1.0 shipped.** Core model, Claude Code adapter, markdown
 renderer, path-rewrite transforms, stdio MCP server, portagenty
 workspace scoping, per-file list cache, and (new in 0.1.0)
-`sessions-index.json` diagnostics + rebuild all landed. 84 tests
-pass across unit / CLI integration / MCP suites.
+`sessions-index.json` diagnostics + rebuild all landed. Since then:
+`pconv handoff` for sessions too large to `/compact`. Covered by
+unit, CLI integration, and MCP test suites.
 
 See the [agents + portagenty page](/portaconv/concepts/agents-and-portagenty/)
 for wiring it into Claude Code / opencode, the

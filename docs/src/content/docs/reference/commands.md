@@ -306,6 +306,44 @@ Cron snippet for keeping the picker honest:
 0 9 * * 1  pconv rebuild-index --all --lag-threshold-hours 168
 ```
 
+## `pconv handoff [<session-id>]`
+
+For a session that overflowed the model context window, where
+`/compact` itself fails. Builds a bounded, recency-biased recovery
+document you paste into a fresh session. Purely local: never calls a
+model, never modifies the source `.jsonl`.
+
+What it keeps: the original task (pinned), then as many of the newest
+interaction units as fit. What it drops: thinking blocks and injected
+skill bodies. The rendered markdown never exceeds `--max-bytes`.
+
+```sh
+# The usual rescue: newest session recorded in this exact directory
+pconv handoff --latest --cwd "$PWD"
+
+# Specific session, smaller budget, written to a file
+pconv handoff <session-id> --max-bytes 32768 -o handoff.md
+
+# Scope latest-session lookup by portagenty workspace instead of cwd
+pconv handoff --latest --workspace-toml auto
+
+# Explicit backing file (duplicate sessionIds)
+pconv handoff --file ~/.claude/projects/<dir>/<uuid>.jsonl
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--latest` | — | Most recent session after scope + dedup. |
+| `--cwd <path>` | — | With `--latest`: only sessions whose recorded cwd is exactly this path. Conflicts with `--workspace-toml`. |
+| `--workspace-toml <path\|auto>` | — | Scope latest lookup by a portagenty workspace. |
+| `--file <path>` | — | Load this JSONL directly, bypassing the corpus walk. |
+| `--max-bytes <n>` | `49152` | Hard cap on the rendered output, in UTF-8 bytes. |
+| `--candidate-messages <n>` | `120` | Only the newest N messages compete for the recent-context suffix. `0` = all. |
+| `--max-block-bytes <n>` | `8192` | Per-block cap (tool inputs/results get half). |
+| `-o, --output <path>` | stdout | Atomic write with user-only permissions. Refuses to overwrite without `--force`. |
+
+Not exposed via MCP yet.
+
 ## `pconv mcp serve`
 
 Stdio MCP server speaking JSON-RPC 2.0 (protocol version `2024-11-05`).
@@ -318,6 +356,16 @@ Line-delimited framing — one JSON object per line on stdin/stdout.
 - `doctor { project?, stale_threshold_hours? }` — same surface as `pconv doctor`. Returns a JSON list of stale-project records. Agents can call this for self-healing: detect staleness, pick a session, then call `get_conversation` to pull the paste-ready markdown.
 
 Not exposed (deliberately): `rebuild-index`. Write ops stay CLI-only.
+
+**Stability.** Agents depend on this surface, so it is versioned like
+an API. Stable from v0.1.0: the tool names above, their argument names,
+types and enum values, the `convos://conversation/{id}` resource
+template, and the field names in each tool's JSON results. Additions
+can land in any release; renames and removals only with a version bump
+and a [CHANGELOG](https://github.com/cybersader/portaconv/blob/main/CHANGELOG.md)
+entry. Descriptions and markdown wording are not part of the contract.
+A snapshot test (`mcp_public_contract_is_stable` in `tests/mcp.rs`)
+enforces this in CI.
 
 **Resources:** one URI template `convos://conversation/{id}`.
 `resources/read` returns the session rendered as markdown with default options.
