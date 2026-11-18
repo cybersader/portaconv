@@ -99,14 +99,24 @@ pub fn render_handoff(conv: &Conversation, opts: &HandoffOptions) -> Result<Stri
     // ---- assemble under budget, newest unit first ---------------------
     let header = render_header(conv, total, opts, task_fallback);
     let task_section = task_ix
-        .map(|ix| format!("## Original task orientation\n\n{}\n", sanitized[ix].rendered))
+        .map(|ix| {
+            format!(
+                "## Original task orientation\n\n{}\n",
+                sanitized[ix].rendered
+            )
+        })
         .unwrap_or_else(|| "## Original task orientation\n\n(none found)\n".to_string());
     let footer = "\n## Reading guidance\n\nThis is a selective recovery handoff, not a full transcript. The source session JSONL is unchanged. If retained recent context conflicts with the original orientation, prefer the recent context. Verify current repository state before trusting historical tool results.\n";
 
     let fixed_cost = header.len() + task_section.len() + footer.len() + 64;
     if fixed_cost >= opts.max_bytes {
         // Task section too big even alone — shrink it hard and retry once.
-        let squeezed = truncate_head_tail(&task_section, opts.max_bytes.saturating_sub(header.len() + footer.len() + 128), 0.75);
+        let squeezed = truncate_head_tail(
+            &task_section,
+            opts.max_bytes
+                .saturating_sub(header.len() + footer.len() + 128),
+            0.75,
+        );
         let doc = format!("{header}{squeezed}\n{footer}");
         return if doc.len() <= opts.max_bytes {
             Ok(doc)
@@ -277,12 +287,14 @@ fn sanitize_message(
                 ));
             }
             ContentBlock::ToolResult {
-                output,
-                is_error,
-                ..
+                output, is_error, ..
             } => {
                 let cap = if *is_error { error_cap } else { result_cap };
-                let label = if *is_error { "tool ERROR" } else { "tool result" };
+                let label = if *is_error {
+                    "tool ERROR"
+                } else {
+                    "tool result"
+                };
                 out.push_str(&format!(
                     "**{label}:**\n```\n{}\n```\n",
                     truncate_head_tail(output, cap, 0.25)
@@ -314,12 +326,11 @@ fn sanitize_message(
     let is_substantive_user_task = msg.role == Role::User
         && has_user_text
         && !after_skill_call
-        && msg
-            .content
-            .iter()
-            .any(|b| matches!(b, ContentBlock::Text { text } if !text.trim().is_empty()
+        && msg.content.iter().any(|b| {
+            matches!(b, ContentBlock::Text { text } if !text.trim().is_empty()
                 && reminder_payload(text).is_none()
-                && !is_skill_body(text, after_skill_call)));
+                && !is_skill_body(text, after_skill_call))
+        });
 
     SanitizedMessage {
         role: msg.role,
@@ -662,11 +673,17 @@ mod tests {
 
     #[test]
     fn recency_bias_keeps_newest() {
-        let mut messages = vec![msg(Role::User, vec![ContentBlock::text("original task: build the parser")])];
+        let mut messages = vec![msg(
+            Role::User,
+            vec![ContentBlock::text("original task: build the parser")],
+        )];
         for i in 0..200 {
             messages.push(msg(
                 Role::User,
-                vec![ContentBlock::text(format!("iteration {i}: {}", "filler ".repeat(500)))],
+                vec![ContentBlock::text(format!(
+                    "iteration {i}: {}",
+                    "filler ".repeat(500)
+                ))],
             ));
             messages.push(msg(
                 Role::Assistant,
