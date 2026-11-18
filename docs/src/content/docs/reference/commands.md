@@ -357,6 +357,16 @@ Line-delimited framing — one JSON object per line on stdin/stdout.
 
 Not exposed (deliberately): `rebuild-index`. Write ops stay CLI-only.
 
+**Stability.** Agents depend on this surface, so it is versioned like
+an API. Stable from v0.1.0: the tool names above, their argument names,
+types and enum values, the `convos://conversation/{id}` resource
+template, and the field names in each tool's JSON results. Additions
+can land in any release; renames and removals only with a version bump
+and a [CHANGELOG](https://github.com/cybersader/portaconv/blob/main/CHANGELOG.md)
+entry. Descriptions and markdown wording are not part of the contract.
+A snapshot test (`mcp_public_contract_is_stable` in `tests/mcp.rs`)
+enforces this in CI.
+
 **Resources:** one URI template `convos://conversation/{id}`.
 `resources/read` returns the session rendered as markdown with default options.
 
