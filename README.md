@@ -187,6 +187,10 @@ paths inside conversation content. That's our wedge.
 | [portagenty](https://github.com/cybersader/portagenty) | Workspace launcher. Uses the workspace `id` field that portaconv will (eventually) leverage for folder-move recovery. |
 | [mcp-workflow-and-tech-stack](https://github.com/cybersader/mcp-workflow-and-tech-stack) | Has the original Docker `claudecode-project-sync` tool — the approach we stepped away from. Will get a banner pointing at portaconv. |
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) to run the same Rust checks as CI.
+
 ## License
 
-MIT.
+[MIT](LICENSE).
